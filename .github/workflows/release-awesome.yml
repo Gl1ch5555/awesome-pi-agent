@@ -39,6 +39,7 @@ jobs:
 
       - name: Typecheck and run awesome-features tests
         run: |
+          npm run hydrate:model-data
           npm run build:offline
           npx tsc -p packages/coding-agent/tsconfig.build.json --noEmit
           npm --prefix packages/coding-agent exec -- vitest run test/awesome-features.test.ts test/theme-controller.test.ts test/interactive-mode-paste.test.ts test/first-time-setup-fork.test.ts test/config-schemas.test.ts test/builtin-tool-strict-mode.test.ts
