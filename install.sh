@@ -143,6 +143,21 @@ if [ -w /usr/local/bin ] && [ "$BIN_DIR" != "/usr/local/bin" ]; then
   ok "Linked /usr/local/bin/$CMD_NAME"
 fi
 
+# Record installed GitHub commit SHA for auto-update checks
+node -e '
+const fs = require("fs");
+const path = require("path");
+const pkg = JSON.parse(fs.readFileSync(path.join(process.argv[1], "packages/coding-agent/package.json"), "utf8"));
+fetch("https://api.github.com/repos/Gl1ch5555/awesome-pi-agent/commits/main", {
+  headers: { "User-Agent": "awesome-pi-agent-installer", "Accept": "application/vnd.github+json" },
+  signal: AbortSignal.timeout(5000)
+}).then(r => r.ok ? r.json() : null).then(d => {
+  if (d && d.sha) {
+    fs.writeFileSync(path.join(process.argv[2], "version.json"), JSON.stringify({ sha: d.sha, version: pkg.version, updatedAt: Date.now() }, null, 2) + "\n");
+  }
+}).catch(() => {});
+' "$SRC_DIR" "$INSTALL_ROOT" >/dev/null 2>&1 || true
+
 if ! echo ":$PATH:" | grep -q ":$BIN_DIR:" && [ ! -w /usr/local/bin ]; then
   warn "$BIN_DIR is not in your PATH. Add this to ~/.bashrc or ~/.zshrc:"
   printf "     ${C_ACCENT}export PATH=\"%s:\$PATH\"${C_RESET}\n" "$BIN_DIR"

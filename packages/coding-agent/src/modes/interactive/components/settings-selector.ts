@@ -15,6 +15,7 @@ import {
 import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
 import { SETTINGS_DEFAULTS } from "../../../core/settings-defaults.ts";
 import {
+	type AutoUpdateMode,
 	CACHE_WARMING_MODES,
 	type CacheWarmingMode,
 	type DefaultProjectTrust,
@@ -107,6 +108,8 @@ export interface SettingsConfig {
 	warnings: WarningSettings;
 	voice?: VoiceSettings;
 	search?: SearchSettings;
+	autoUpdate?: AutoUpdateMode;
+	syncUser?: string;
 }
 
 export interface SettingsCallbacks {
@@ -152,6 +155,8 @@ export interface SettingsCallbacks {
 	onSearchApiKeyChange?: (provider: string, apiKey: string | undefined) => void;
 	onSearchExtrasChange?: (extras: { enabled?: boolean; searxngUrl?: string; googleCseId?: string }) => void;
 	onOpenProviders?: () => void;
+	onOpenSync?: () => void;
+	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
 
@@ -817,6 +822,20 @@ export class SettingsSelectorComponent extends Container {
 				values: ["open"],
 			},
 			{
+				id: "cloud-sync",
+				label: "Cloud sync (/sync)",
+				description: "Sync settings, API keys, models, and skills by login & password",
+				currentValue: config.syncUser ? `signed in (${config.syncUser})` : "not signed in",
+				values: ["open"],
+			},
+			{
+				id: "auto-update",
+				label: "GitHub auto-update (/update)",
+				description: "Check Gl1ch5555/awesome-pi-agent on startup",
+				currentValue: config.autoUpdate ?? "auto",
+				values: ["auto", "notify", "off"],
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -1055,6 +1074,13 @@ export class SettingsSelectorComponent extends Container {
 					case "custom-providers":
 						callbacks.onCancel();
 						callbacks.onOpenProviders?.();
+						break;
+					case "cloud-sync":
+						callbacks.onCancel();
+						callbacks.onOpenSync?.();
+						break;
+					case "auto-update":
+						callbacks.onAutoUpdateChange?.(newValue as AutoUpdateMode);
 						break;
 				}
 			},

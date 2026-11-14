@@ -745,6 +745,24 @@
         }
       }
     },
+    "autoUpdate": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "type": "string",
+          "const": "notify"
+        },
+        {
+          "type": "string",
+          "const": "off"
+        }
+      ],
+      "description": "GitHub auto-update mode (auto, notify, off).",
+      "default": "auto"
+    },
     "onboardingCompleted": {
       "type": "boolean",
       "default": false

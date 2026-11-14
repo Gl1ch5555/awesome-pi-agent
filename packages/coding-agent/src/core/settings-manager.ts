@@ -11,6 +11,7 @@ import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 import type {
+	AutoUpdateMode,
 	CacheWarmingMode,
 	CompactionModelOverride,
 	DefaultProjectTrust,
@@ -31,6 +32,7 @@ import type {
 } from "./settings-schema.ts";
 
 export type {
+	AutoUpdateMode,
 	BranchSummarySettings,
 	CacheWarmingMode,
 	CodemodeMode,
@@ -1469,6 +1471,17 @@ export class SettingsManager {
 	setOnboardingCompleted(completed: boolean): void {
 		this.globalSettings.onboardingCompleted = completed;
 		this.markModified("onboardingCompleted");
+		this.save();
+	}
+
+	getAutoUpdate(): AutoUpdateMode {
+		const mode = this.settings.autoUpdate;
+		return mode === "notify" || mode === "off" ? mode : SETTINGS_DEFAULTS.autoUpdate;
+	}
+
+	setAutoUpdate(mode: AutoUpdateMode): void {
+		this.globalSettings.autoUpdate = mode;
+		this.markModified("autoUpdate");
 		this.save();
 	}
 

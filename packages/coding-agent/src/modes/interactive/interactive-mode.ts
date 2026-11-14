@@ -77,6 +77,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
+import { readSyncState, syncAutoOnStartup, syncPull, syncPush } from "../../core/cloud-sync.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -94,6 +95,7 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
+import { checkGithubUpdate, performGithubSelfUpdate } from "../../core/github-updater.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
@@ -192,6 +194,7 @@ import {
 	type StatusIndicator,
 	WorkingStatusIndicator,
 } from "./components/status-indicator.ts";
+import { SyncManagerComponent } from "./components/sync-manager.ts";
 import { ThemedText } from "./components/themed-text.ts";
 import { ThinkingSelectorComponent } from "./components/thinking-selector.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
@@ -1209,12 +1212,41 @@ export class InteractiveMode {
 				.finally(() => clearTimeout(timeout));
 		}
 
-		// Start version check asynchronously
-		checkForNewPiVersion(this.version).then((newRelease) => {
-			if (newRelease) {
-				this.showNewVersionNotification(newRelease);
-			}
-		});
+		// Check GitHub version & auto-update + Cloud Sync asynchronously
+		const autoUpdateMode = this.settingsManager.getAutoUpdate();
+		if (autoUpdateMode !== "off") {
+			void checkGithubUpdate(this.version).then(async (updateInfo) => {
+				if (!updateInfo?.hasUpdate) return;
+				if (autoUpdateMode === "auto") {
+					this.showStatus(
+						`Updating pi-awesome from GitHub (${updateInfo.shortSha ?? updateInfo.remoteVersion})...`,
+					);
+					try {
+						const result = await performGithubSelfUpdate(this.version);
+						if (result.updated) {
+							this.showStatus(result.message);
+						}
+					} catch {
+						this.showStatus(
+							`Update available on GitHub (${updateInfo.shortSha ?? updateInfo.remoteVersion}). Run /update`,
+						);
+					}
+				} else {
+					this.showStatus(
+						`Update available on GitHub (${updateInfo.shortSha ?? updateInfo.remoteVersion}). Run /update`,
+					);
+				}
+			});
+		}
+
+		void syncAutoOnStartup()
+			.then(async (res) => {
+				if (res.action === "pulled") {
+					await this.applySyncedConfiguration();
+					this.showStatus(`Cloud sync: restored settings & skills (${res.skillFiles ?? 0} files)`);
+				}
+			})
+			.catch(() => {});
 
 		// Start package update check asynchronously
 		this.checkForPackageUpdates()
@@ -3408,6 +3440,17 @@ export class InteractiveMode {
 				await this.handleVoiceCommand(arg || undefined);
 				return;
 			}
+			if (text === "/sync" || text.startsWith("/sync ")) {
+				const arg = text.slice("/sync".length).trim();
+				this.editor.setText("");
+				await this.handleSyncCommand(arg || undefined);
+				return;
+			}
+			if (text === "/update") {
+				this.editor.setText("");
+				await this.handleUpdateCommand();
+				return;
+			}
 			if (text === "/scoped-models") {
 				this.editor.setText("");
 				await this.showModelsSelector();
@@ -5255,6 +5298,8 @@ export class InteractiveMode {
 					warnings: this.settingsManager.getWarnings(),
 					voice: this.settingsManager.getVoiceSettings(),
 					search: this.settingsManager.getSearchSettings(),
+					autoUpdate: this.settingsManager.getAutoUpdate(),
+					syncUser: readSyncState()?.user,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -5452,14 +5497,117 @@ export class InteractiveMode {
 					onOpenProviders: () => {
 						this.showProviderManager();
 					},
+					onOpenSync: () => {
+						this.showSyncManager();
+					},
+					onAutoUpdateChange: (mode) => {
+						this.settingsManager.setAutoUpdate(mode);
+						this.triggerAutoSyncPush();
+					},
 					onCancel: () => {
 						done();
+						this.triggerAutoSyncPush();
 						this.ui.requestRender();
 					},
 				},
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});
+	}
+
+	private triggerAutoSyncPush(): void {
+		const state = readSyncState();
+		if (state?.autoSync) {
+			void syncPush().catch(() => {});
+		}
+	}
+
+	private async applySyncedConfiguration(): Promise<void> {
+		this.settingsManager.reload();
+		await this.session.modelRuntime.refresh();
+		await this.session.reload();
+		const themeSetting = this.settingsManager.getThemeSetting();
+		if (themeSetting) {
+			this.themeController.setThemeSetting(themeSetting);
+		}
+		const vs = this.settingsManager.getVoiceSettings();
+		this.defaultEditor.setVoiceHoldEnabled(vs.enabled !== false && vs.holdSpaceToTalk !== false);
+		await this.updateAvailableProviderCount();
+		this.footer.invalidate();
+		this.updateEditorBorderColor();
+		this.ui.requestRender();
+	}
+
+	private showSyncManager(): void {
+		this.showSelector((done) => {
+			const manager = new SyncManagerComponent(this.ui, {
+				onPulled: async () => {
+					await this.applySyncedConfiguration();
+				},
+				onStatus: (msg) => {
+					this.showStatus(msg);
+				},
+				onClose: () => {
+					done();
+					this.ui.requestRender();
+				},
+			});
+			return { component: manager, focus: manager };
+		});
+	}
+
+	private async handleSyncCommand(arg?: string): Promise<void> {
+		if (!arg) {
+			this.showSyncManager();
+			return;
+		}
+		if (arg === "push") {
+			this.showStatus("Cloud sync: pushing...");
+			try {
+				const res = await syncPush();
+				this.showStatus(`Cloud sync: pushed (${res.skillFiles} skill files)`);
+			} catch (error) {
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+			return;
+		}
+		if (arg === "pull") {
+			this.showStatus("Cloud sync: pulling...");
+			try {
+				const res = await syncPull();
+				if (!res.hasData) {
+					this.showStatus("Cloud sync: no remote backup yet");
+				} else {
+					await this.applySyncedConfiguration();
+					this.showStatus(`Cloud sync: pulled (${res.skillFiles} skill files, ${res.promptFiles} prompts)`);
+				}
+			} catch (error) {
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+			return;
+		}
+		if (arg === "status") {
+			const s = readSyncState();
+			if (!s) {
+				this.showStatus("Cloud sync: not signed in (run /sync)");
+			} else {
+				this.showStatus(`Cloud sync: ${s.user} @ ${s.serverUrl} (autoSync=${s.autoSync ? "on" : "off"})`);
+			}
+			return;
+		}
+		this.showSyncManager();
+	}
+
+	private async handleUpdateCommand(): Promise<void> {
+		this.showStatus("Checking GitHub for updates...");
+		try {
+			const result = await performGithubSelfUpdate(this.version, (stage) => {
+				this.showStatus(stage);
+			});
+			this.showStatus(result.message);
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private showProviderManager(startAtAdd = false): void {
@@ -5478,12 +5626,14 @@ export class InteractiveMode {
 						}
 						this.footer.invalidate();
 						this.showStatus(`Saved provider "${providerId}" (${modelIds.length} models)`);
+						this.triggerAutoSyncPush();
 					},
 					onDeleted: async (providerId) => {
 						await this.session.modelRuntime.refresh();
 						await this.updateAvailableProviderCount();
 						this.footer.invalidate();
 						this.showStatus(`Removed provider "${providerId}"`);
+						this.triggerAutoSyncPush();
 					},
 					onClose: () => {
 						done();

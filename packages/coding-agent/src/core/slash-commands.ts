@@ -20,6 +20,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "settings", description: "Open settings menu" },
 	{ name: "providers", description: "Manage custom LLM providers and fetch /v1/models" },
 	{ name: "voice", description: "Toggle or configure voice input (Groq Whisper)" },
+	{ name: "sync", description: "Cloud sync (login, push, pull settings, API keys, models, skills)" },
+	{ name: "update", description: "Check and install updates from GitHub" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{ name: "thinking", description: "Set thinking level", argumentHint: "<level>" },

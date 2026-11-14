@@ -171,6 +171,15 @@ node "$CliEntry" %*
 
 Write-Ok "Installed $CmdShim"
 
+# Record installed GitHub commit SHA for auto-update checks
+try {
+    $commitMeta = Invoke-RestMethod -Uri "https://api.github.com/repos/${RepoOwner}/${RepoName}/commits/main" -Headers @{ "User-Agent" = "awesome-pi-agent-installer" } -TimeoutSec 5
+    $pkgMeta = Get-Content (Join-Path $SrcDir "packages\coding-agent\package.json") -Raw | ConvertFrom-Json
+    if ($commitMeta.sha) {
+        @{ sha = $commitMeta.sha; version = $pkgMeta.version; updatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } | ConvertTo-Json | Set-Content -Path (Join-Path $InstallRoot "version.json") -Encoding UTF8
+    }
+} catch {}
+
 $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
 if (-not $userPath) { $userPath = "" }
 $pathEntries = $userPath.Split(";") | Where-Object { $_ }

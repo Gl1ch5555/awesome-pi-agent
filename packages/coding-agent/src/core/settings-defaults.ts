@@ -75,5 +75,6 @@ export const SETTINGS_DEFAULTS = {
 		enabled: true,
 		provider: "tavily",
 	},
+	autoUpdate: "auto",
 	onboardingCompleted: false,
 } as const;

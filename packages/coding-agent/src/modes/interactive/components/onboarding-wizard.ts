@@ -6,6 +6,7 @@ import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { rawKeyHint } from "./keybinding-hints.ts";
 import { ProviderManagerComponent } from "./provider-manager.ts";
+import { SyncManagerComponent } from "./sync-manager.ts";
 
 export interface OnboardingWizardResult {
 	theme: string;
@@ -22,7 +23,15 @@ export interface OnboardingWizardOptions {
 	onSkip: () => void;
 }
 
-type WizardStep = "theme" | "search-provider" | "search-key" | "voice-key" | "provider-prompt" | "provider-manager";
+type WizardStep =
+	| "mode"
+	| "sync"
+	| "theme"
+	| "search-provider"
+	| "search-key"
+	| "voice-key"
+	| "provider-prompt"
+	| "provider-manager";
 
 const THEME_OPTIONS = [
 	{ value: "graphite", label: "Graphite (minimalist dark, default)" },
@@ -34,8 +43,9 @@ const THEME_OPTIONS = [
 export class OnboardingWizardComponent extends Container implements Focusable {
 	private tui: TUI;
 	private options: OnboardingWizardOptions;
-	private step: WizardStep = "theme";
+	private step: WizardStep = "mode";
 
+	private modeIndex = 0;
 	private themeIndex = 0;
 	private searchProviderIndex = 0;
 	private providerPromptIndex = 0;
@@ -46,6 +56,7 @@ export class OnboardingWizardComponent extends Container implements Focusable {
 
 	private input: Input;
 	private providerManager: ProviderManagerComponent | undefined;
+	private syncManager: SyncManagerComponent | undefined;
 
 	private _focused = false;
 	get focused(): boolean {
@@ -55,6 +66,7 @@ export class OnboardingWizardComponent extends Container implements Focusable {
 		this._focused = value;
 		this.input.focused = value;
 		if (this.providerManager) this.providerManager.focused = value;
+		if (this.syncManager) this.syncManager.focused = value;
 	}
 
 	constructor(options: OnboardingWizardOptions) {
@@ -87,16 +99,41 @@ export class OnboardingWizardComponent extends Container implements Focusable {
 			this.tui.requestRender();
 			return;
 		}
+		if (this.step === "sync" && this.syncManager) {
+			this.addChild(this.syncManager);
+			this.tui.requestRender();
+			return;
+		}
 
 		this.addChild(new DynamicBorder((s) => theme.fg("borderAccent", s)));
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.bold(theme.fg("accent", "pi setup")), 1, 0));
+		this.addChild(new Text(theme.bold(theme.fg("accent", "pi-awesome setup")), 1, 0));
 		this.addChild(
 			new Text(theme.fg("dim", "Quick initial configuration (also editable anytime in /settings)"), 1, 0),
 		);
 		this.addChild(new Spacer(1));
 
-		if (this.step === "theme") {
+		if (this.step === "mode") {
+			this.addChild(new Text(theme.fg("text", "Start fresh or restore from Cloud Sync?"), 1, 0));
+			this.addChild(new Spacer(1));
+			const modes = [
+				"New setup (theme, search, Groq Whisper voice, custom providers)",
+				"Restore from Cloud Sync (login & password -> settings, keys, models, skills)",
+			];
+			for (let i = 0; i < modes.length; i++) {
+				const active = i === this.modeIndex;
+				const prefix = active ? theme.fg("accent", "> ") : "  ";
+				this.addChild(new Text(`${prefix}${theme.fg(active ? "accent" : "text", modes[i]!)}`, 1, 0));
+			}
+			this.addChild(new Spacer(1));
+			this.addChild(
+				new Text(
+					`${rawKeyHint("Up/Down", "select")}  ${rawKeyHint("Enter", "continue")}  ${rawKeyHint("Esc", "skip all")}`,
+					1,
+					0,
+				),
+			);
+		} else if (this.step === "theme") {
 			this.addChild(new Text(theme.fg("text", "1/4  Select interface theme:"), 1, 0));
 			this.addChild(new Spacer(1));
 			for (let i = 0; i < THEME_OPTIONS.length; i++) {
@@ -193,6 +230,48 @@ export class OnboardingWizardComponent extends Container implements Focusable {
 
 		if (this.step === "provider-manager" && this.providerManager) {
 			this.providerManager.handleInput(data);
+			return;
+		}
+		if (this.step === "sync" && this.syncManager) {
+			this.syncManager.handleInput(data);
+			return;
+		}
+
+		if (this.step === "mode") {
+			if (kb.matches(data, "tui.select.up") || data === "k" || kb.matches(data, "tui.select.down") || data === "j") {
+				this.modeIndex = this.modeIndex === 0 ? 1 : 0;
+				this.rebuild();
+				return;
+			}
+			if (kb.matches(data, "tui.select.cancel")) {
+				this.options.onSkip();
+				return;
+			}
+			if (kb.matches(data, "tui.select.confirm") || data === "\n") {
+				if (this.modeIndex === 0) {
+					this.step = "theme";
+					this.rebuild();
+				} else {
+					let restored = false;
+					this.syncManager = new SyncManagerComponent(this.tui, {
+						onPulled: () => {
+							restored = true;
+						},
+						onClose: () => {
+							this.syncManager = undefined;
+							if (restored) {
+								this.options.onSkip();
+							} else {
+								this.step = "mode";
+								this.rebuild();
+							}
+						},
+					});
+					this.syncManager.focused = this._focused;
+					this.step = "sync";
+					this.rebuild();
+				}
+			}
 			return;
 		}
 

@@ -465,6 +465,12 @@ export const SettingsSchema = Type.Object(
 		warnings: Type.Optional(WarningSettingsSchema),
 		voice: Type.Optional(VoiceSettingsSchema),
 		search: Type.Optional(SearchSettingsSchema),
+		autoUpdate: Type.Optional(
+			Type.Union([Type.Literal("auto"), Type.Literal("notify"), Type.Literal("off")], {
+				description: "GitHub auto-update mode (auto, notify, off).",
+				default: SETTINGS_DEFAULTS.autoUpdate,
+			}),
+		),
 		onboardingCompleted: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.onboardingCompleted })),
 		codemode: Type.Optional(CodemodeSettingsSchema),
 		sessionDir: Type.Optional(
@@ -551,6 +557,7 @@ export type VoiceModel = NonNullable<Static<typeof VoiceSettingsSchema>["model"]
 export interface VoiceSettings extends Static<typeof VoiceSettingsSchema> {}
 export type SearchProviderId = Static<typeof SearchProviderSchema>;
 export interface SearchSettings extends Static<typeof SearchSettingsSchema> {}
+export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}
 export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust"]>;

@@ -1,13 +1,20 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	applyRemoteSyncBundle,
+	collectLocalSyncBundle,
+	readSyncState,
+	writeSyncState,
+} from "../src/core/cloud-sync.ts";
 import {
 	deleteCustomProvider,
 	fetchProviderModelsCatalog,
 	listCustomProviders,
 	upsertCustomProvider,
 } from "../src/core/custom-providers.ts";
+import { checkGithubUpdate } from "../src/core/github-updater.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createWebSearchToolDefinition, SEARCH_PROVIDERS } from "../src/core/tools/web-search.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -134,5 +141,57 @@ describe("awesome-pi-agent customizations", () => {
 		expect(out.details?.provider).toBe("tavily");
 		expect(out.details?.resultCount).toBe(1);
 		expect((out.content[0] as { text: string }).text).toContain("https://pi.dev");
+	});
+
+	it("collects and restores cloud sync bundle including settings, keys, models, and skills", () => {
+		const srcAgentDir = join(tempDir, "src-agent");
+		const dstAgentDir = join(tempDir, "dst-agent");
+		const skillDir = join(srcAgentDir, "skills", "my-skill");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(join(srcAgentDir, "settings.json"), JSON.stringify({ theme: "graphite" }));
+		writeFileSync(join(srcAgentDir, "models.json"), JSON.stringify({ providers: { test: { baseUrl: "http://x" } } }));
+		writeFileSync(join(srcAgentDir, "auth.json"), JSON.stringify({ groq: { key: "gsk_test" } }));
+		writeFileSync(join(skillDir, "SKILL.md"), "# My Skill\nhello");
+
+		const bundle = collectLocalSyncBundle(srcAgentDir);
+		expect(bundle.settings?.theme).toBe("graphite");
+		expect(bundle.skills?.["my-skill/SKILL.md"]?.content).toContain("My Skill");
+
+		const applied = applyRemoteSyncBundle(bundle, dstAgentDir);
+		expect(applied.skillFiles).toBe(1);
+		expect(readFileSync(join(dstAgentDir, "skills", "my-skill", "SKILL.md"), "utf8")).toContain("My Skill");
+		expect(readFileSync(join(dstAgentDir, "auth.json"), "utf8")).toContain("gsk_test");
+
+		writeSyncState(
+			{
+				serverUrl: "https://grzxk.ru/pi-sync",
+				user: "pavel",
+				token: "a".repeat(64),
+				lastSyncUpdated: 123,
+				autoSync: true,
+			},
+			dstAgentDir,
+		);
+		expect(readSyncState(dstAgentDir)?.user).toBe("pavel");
+	});
+
+	it("checks GitHub update commit SHA and version", async () => {
+		vi.stubEnv("PI_INSTALL_DIR", tempDir);
+		writeFileSync(join(tempDir, "version.json"), JSON.stringify({ sha: "1111111111111111111111111111111111111111" }));
+		vi.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(
+					JSON.stringify({
+						sha: "2222222222222222222222222222222222222222",
+						commit: { message: "feat: new update" },
+					}),
+					{ status: 200 },
+				),
+			)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ version: "1.5.2" }), { status: 200 }));
+
+		const info = await checkGithubUpdate("1.5.2");
+		expect(info?.hasUpdate).toBe(true);
+		expect(info?.shortSha).toBe("2222222");
 	});
 });
