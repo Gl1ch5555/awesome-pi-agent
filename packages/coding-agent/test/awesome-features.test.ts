@@ -178,17 +178,15 @@ describe("awesome-pi-agent customizations", () => {
 	it("checks GitHub update commit SHA and version", async () => {
 		vi.stubEnv("PI_INSTALL_DIR", tempDir);
 		writeFileSync(join(tempDir, "version.json"), JSON.stringify({ sha: "1111111111111111111111111111111111111111" }));
-		vi.spyOn(globalThis, "fetch")
-			.mockResolvedValueOnce(
-				new Response(
-					JSON.stringify({
-						sha: "2222222222222222222222222222222222222222",
-						commit: { message: "feat: new update" },
-					}),
-					{ status: 200 },
-				),
-			)
-			.mockResolvedValueOnce(new Response(JSON.stringify({ version: "1.5.2" }), { status: 200 }));
+		vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					sha: "2222222222222222222222222222222222222222",
+					version: "1.5.2",
+				}),
+				{ status: 200 },
+			),
+		);
 
 		const info = await checkGithubUpdate("1.5.2");
 		expect(info?.hasUpdate).toBe(true);

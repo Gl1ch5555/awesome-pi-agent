@@ -150,7 +150,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
-import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { type LatestPiRelease } from "../../utils/version-check.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -506,8 +506,8 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
-	private onInputCallback?: (input: { text: string; images?: ImageContent[] }) => void;
-	private pendingUserInputs: Array<{ text: string; images?: ImageContent[] }> = [];
+	private onInputCallback?: (input: string | { text: string; images?: ImageContent[] }) => void;
+	private pendingUserInputs: Array<string | { text: string; images?: ImageContent[] }> = [];
 	private pendingImageAttachments: PendingImageAttachment[] = [];
 	private activeVoiceSession: LiveVoiceSession | undefined = undefined;
 	private voiceIndicator: VoiceIndicatorComponent | undefined = undefined;
@@ -1337,9 +1337,11 @@ export class InteractiveMode {
 		// Main interactive loop
 		while (true) {
 			const userInput = await this.getUserInput();
+			const promptText = typeof userInput === "string" ? userInput : userInput.text;
+			const promptImages = typeof userInput === "string" ? undefined : userInput.images;
 			try {
-				await this.session.prompt(userInput.text, {
-					images: userInput.images,
+				await this.session.prompt(promptText, {
+					images: promptImages,
 				});
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -3622,11 +3624,13 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				const attachments = this.pendingImageAttachments.splice(0);
+				const attachments = Array.isArray(this.pendingImageAttachments)
+					? this.pendingImageAttachments.splice(0)
+					: [];
 				const resolved = await resolvePromptImages(text, attachments, {
-					cwd: this.sessionManager.getCwd(),
-					autoResizeImages: this.settingsManager.getImageAutoResize(),
-					blockImages: this.settingsManager.getBlockImages(),
+					cwd: this.sessionManager?.getCwd?.() ?? process.cwd(),
+					autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
+					blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 				});
 				await this.session.prompt(resolved.text, {
 					streamingBehavior: "steer",
@@ -3641,21 +3645,22 @@ export class InteractiveMode {
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
-			const attachments = this.pendingImageAttachments.splice(0);
+			const attachments = Array.isArray(this.pendingImageAttachments) ? this.pendingImageAttachments.splice(0) : [];
 			const resolved = await resolvePromptImages(text, attachments, {
-				cwd: this.sessionManager.getCwd(),
-				autoResizeImages: this.settingsManager.getImageAutoResize(),
-				blockImages: this.settingsManager.getBlockImages(),
+				cwd: this.sessionManager?.getCwd?.() ?? process.cwd(),
+				autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
+				blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 			});
 			const submittedInput = {
 				text: resolved.text,
 				images: resolved.images.length > 0 ? resolved.images : undefined,
 			};
 
+			const nextInput = resolved.images.length > 0 ? submittedInput : resolved.text;
 			if (this.onInputCallback) {
-				this.onInputCallback(submittedInput);
+				this.onInputCallback(nextInput);
 			} else {
-				this.pendingUserInputs.push(submittedInput);
+				this.pendingUserInputs.push(nextInput);
 			}
 			this.editor.addToHistory?.(text);
 		};
@@ -4566,14 +4571,14 @@ export class InteractiveMode {
 		);
 	}
 
-	async getUserInput(): Promise<{ text: string; images?: ImageContent[] }> {
+	async getUserInput(): Promise<string | { text: string; images?: ImageContent[] }> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
 			return queuedInput;
 		}
 
 		return new Promise((resolve) => {
-			this.onInputCallback = (input: { text: string; images?: ImageContent[] }) => {
+			this.onInputCallback = (input: string | { text: string; images?: ImageContent[] }) => {
 				this.onInputCallback = undefined;
 				resolve(input);
 			};
@@ -4819,11 +4824,11 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			const attachments = this.pendingImageAttachments.splice(0);
+			const attachments = Array.isArray(this.pendingImageAttachments) ? this.pendingImageAttachments.splice(0) : [];
 			const resolved = await resolvePromptImages(text, attachments, {
-				cwd: this.sessionManager.getCwd(),
-				autoResizeImages: this.settingsManager.getImageAutoResize(),
-				blockImages: this.settingsManager.getBlockImages(),
+				cwd: this.sessionManager?.getCwd?.() ?? process.cwd(),
+				autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
+				blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 			});
 			await this.session.prompt(resolved.text, {
 				streamingBehavior: "followUp",

@@ -143,6 +143,34 @@ function buildWindowsPowerShellRecorderScript(): string {
 	].join("\n");
 }
 
+function findLinuxFfmpegInput(): { format: string; input: string } | undefined {
+	try {
+		const out = execFileSync("ffmpeg", ["-hide_banner", "-devices"], {
+			encoding: "utf8",
+			timeout: 3000,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (/\bpulse\b/.test(out)) return { format: "pulse", input: "default" };
+		if (/\balsa\b/.test(out)) return { format: "alsa", input: "default" };
+		if (/\boss\b/.test(out)) return { format: "oss", input: "/dev/dsp" };
+	} catch {
+		// ignore and try -formats
+	}
+	try {
+		const out = execFileSync("ffmpeg", ["-hide_banner", "-formats"], {
+			encoding: "utf8",
+			timeout: 3000,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (/\bpulse\b/.test(out)) return { format: "pulse", input: "default" };
+		if (/\balsa\b/.test(out)) return { format: "alsa", input: "default" };
+		if (/\boss\b/.test(out)) return { format: "oss", input: "/dev/dsp" };
+	} catch {
+		// ignore
+	}
+	return undefined;
+}
+
 export function detectRecorderBackend(): RecorderBackend | undefined {
 	const p = process.platform;
 	if (p === "linux") {
@@ -161,25 +189,28 @@ export function detectRecorderBackend(): RecorderBackend | undefined {
 			};
 		}
 		if (commandExists("ffmpeg")) {
-			return {
-				name: "ffmpeg",
-				command: "ffmpeg",
-				args: [
-					"-loglevel",
-					"error",
-					"-f",
-					"pulse",
-					"-i",
-					"default",
-					"-ar",
-					"16000",
-					"-ac",
-					"1",
-					"-f",
-					"s16le",
-					"pipe:1",
-				],
-			};
+			const linuxInput = findLinuxFfmpegInput();
+			if (linuxInput) {
+				return {
+					name: `ffmpeg-${linuxInput.format}`,
+					command: "ffmpeg",
+					args: [
+						"-loglevel",
+						"error",
+						"-f",
+						linuxInput.format,
+						"-i",
+						linuxInput.input,
+						"-ar",
+						"16000",
+						"-ac",
+						"1",
+						"-f",
+						"s16le",
+						"pipe:1",
+					],
+				};
+			}
 		}
 		if (commandExists("sox")) {
 			return {
@@ -308,10 +339,13 @@ export class VoiceRecorder {
 	start(events: VoiceRecorderEvents = {}): RecorderBackend {
 		const backend = detectRecorderBackend();
 		if (!backend) {
+			const isTermux = Boolean(process.env.TERMUX_VERSION) || process.env.PREFIX?.includes("com.termux");
 			throw new Error(
-				process.platform === "linux"
-					? "No microphone recorder found (install pulseaudio-utils `parecord`, alsa-utils `arecord`, `ffmpeg`, or `sox`)"
-					: "No microphone recorder available on this system",
+				isTermux
+					? "No audio input backend found on Termux (ffmpeg lacks pulse/alsa). Run: pkg install pulseaudio && pulseaudio --start --load='module-sles-source'"
+					: process.platform === "linux"
+						? "No microphone recorder found (install pulseaudio-utils `parecord`, alsa-utils `arecord`, `sox`, or `ffmpeg` with pulse/alsa)"
+						: "No microphone recorder available on this system",
 			);
 		}
 

@@ -33,7 +33,7 @@ curl -fsSL -H "Authorization: token $PI_GH_TOKEN" \
   https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.sh | bash
 ```
 
-Повторный запуск этой же команды обновляет `pi-awesome` до последнего коммита.
+Установщики сразу скачивают **готовый скомпилированный бинарник** из [GitHub Releases (`latest`)](https://github.com/Gl1ch5555/awesome-pi-agent/releases/tag/latest) (собранный в GitHub Actions для Linux x64/arm64, macOS arm64/x64 и Windows x64/arm64). Node.js и ручная сборка не требуются; при отсутствии релиза срабатывает автоматический fallback на сборку из исходников.
 
 Папка установки: `~/.pi-awesome` (Linux/macOS) и `%USERPROFILE%\.pi-awesome` (Windows).
 Команда запуска: `pi-awesome`.
@@ -54,7 +54,7 @@ $h = @{ Authorization = "token $env:PI_GH_TOKEN" }
 irm -Headers $h "https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.ps1" | iex
 ```
 
-На Windows установщик сам проверит `git` и `Node.js` (при необходимости доставит через `winget`), соберёт `pi` и добавит команду `pi` в пользовательский `PATH`.
+Установщик скачает готовый `pi-windows-x64.zip` / `pi-windows-arm64.zip` и добавит команду `pi-awesome` в пользовательский `PATH`.
 
 ---
 

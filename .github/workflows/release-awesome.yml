@@ -1,0 +1,110 @@
+name: Build & Release Prebuilt Binaries
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-awesome-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install zip tool
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck and run awesome-features tests
+        run: |
+          npm run build:offline
+          npx tsc -p packages/coding-agent/tsconfig.build.json --noEmit
+          npm --prefix packages/coding-agent exec -- vitest run test/awesome-features.test.ts test/theme-controller.test.ts test/interactive-mode-paste.test.ts test/first-time-setup-fork.test.ts test/config-schemas.test.ts test/builtin-tool-strict-mode.test.ts
+
+      - name: Build standalone binaries for all platforms
+        run: |
+          chmod +x scripts/build-binaries.sh
+          ./scripts/build-binaries.sh --skip-install --skip-build --out release-assets
+
+      - name: Smoke-test Linux x64 binary
+        run: |
+          ./release-assets/linux-x64/pi --version
+
+      - name: Prepare version metadata and checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          PKG_VERSION="$(node -e 'console.log(JSON.parse(require("fs").readFileSync("../packages/coding-agent/package.json", "utf8")).version)')"
+          cat > version.json <<EOF
+          {
+            "version": "${PKG_VERSION}",
+            "sha": "${GITHUB_SHA}",
+            "tag": "latest",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          sha256sum \
+            pi-linux-x64.tar.gz \
+            pi-linux-arm64.tar.gz \
+            pi-darwin-arm64.tar.gz \
+            pi-darwin-x64.tar.gz \
+            pi-windows-x64.zip \
+            pi-windows-arm64.zip \
+            version.json > SHA256SUMS
+
+      - name: Publish rolling latest GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest "${GITHUB_SHA}"
+          git push -f origin latest
+
+          PKG_VERSION="$(node -e 'console.log(JSON.parse(require("fs").readFileSync("packages/coding-agent/package.json", "utf8")).version)')"
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
+          NOTES="Prebuilt standalone binaries for **awesome-pi-agent** v${PKG_VERSION} (\`${SHORT_SHA}\`).\n\nNo Node.js or build step required — install via:\n\`\`\`bash\ncurl -fsSL https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.sh | bash\n\`\`\`"
+
+          ASSETS=(
+            release-assets/pi-linux-x64.tar.gz
+            release-assets/pi-linux-arm64.tar.gz
+            release-assets/pi-darwin-arm64.tar.gz
+            release-assets/pi-darwin-x64.tar.gz
+            release-assets/pi-windows-x64.zip
+            release-assets/pi-windows-arm64.zip
+            release-assets/version.json
+            release-assets/SHA256SUMS
+          )
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "latest (${PKG_VERSION} @ ${SHORT_SHA})" --notes "$(printf '%b' "$NOTES")"
+            gh release upload latest --clobber "${ASSETS[@]}"
+          else
+            gh release create latest \
+              --title "latest (${PKG_VERSION} @ ${SHORT_SHA})" \
+              --notes "$(printf '%b' "$NOTES")" \
+              "${ASSETS[@]}"
+          fi

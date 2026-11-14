@@ -26,7 +26,6 @@ import type {
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
-	VoiceModel,
 	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
@@ -56,7 +55,6 @@ export type {
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
-	VoiceModel,
 	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
@@ -1552,7 +1550,7 @@ export class SettingsManager {
 	setSearchApiKey(provider: string, apiKey: string | undefined): void {
 		this.globalSettings.search ??= {};
 		this.globalSettings.search.apiKeys ??= {};
-		if (apiKey && apiKey.trim()) {
+		if (apiKey?.trim()) {
 			this.globalSettings.search.apiKeys[provider] = apiKey.trim();
 		} else {
 			delete this.globalSettings.search.apiKeys[provider];
