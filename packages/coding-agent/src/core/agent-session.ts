@@ -82,6 +82,7 @@ import {
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
+import { formatMemoryPromptSection } from "./memory-store.ts";
 import {
 	type AgentActivityOutcome,
 	type BoundaryContextPreview,
@@ -1812,12 +1813,21 @@ export class AgentSession {
 			cwd: this._cwd,
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
+			memoryPrompt: formatMemoryPromptSection({ cwd: this._cwd, agentDir: this.settingsManager.getAgentDir() }),
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
 			hiddenTools: [...this._hiddenDeclarations],
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
+		});
+	}
+
+	private _refreshMemoryPromptSection(): void {
+		if (!this._baseSystemPromptOptions) return;
+		this._baseSystemPromptOptions.memoryPrompt = formatMemoryPromptSection({
+			cwd: this._cwd,
+			agentDir: this.settingsManager.getAgentDir(),
 		});
 	}
 
@@ -1835,6 +1845,10 @@ export class AgentSession {
 		options: NormalizedBuildSystemPromptOptions,
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
+		options.memoryPrompt = formatMemoryPromptSection({
+			cwd: this._cwd,
+			agentDir: this.settingsManager.getAgentDir(),
+		});
 		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
 		// The tool list and rules must match the declarations the request carries.
 		options.hiddenTools = [...this._hiddenDeclarations];
@@ -3789,6 +3803,10 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					memory: {
+						getAgentDir: () => this.settingsManager.getAgentDir(),
+						onUpdated: () => this._refreshMemoryPromptSection(),
+					},
 					webSearch: { getSettings: () => this.settingsManager.getSearchSettings() },
 					webFetch: { getSettings: () => this.settingsManager.getSearchSettings() },
 				});
@@ -3819,7 +3837,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "memory"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,

@@ -34,6 +34,8 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** Pre-formatted persistent memory & project lessons block. */
+	memoryPrompt?: string;
 }
 
 export type NormalizedBuildSystemPromptOptions = BuildSystemPromptOptions & {
@@ -46,6 +48,7 @@ export type NormalizedBuildSystemPromptOptions = BuildSystemPromptOptions & {
 	sections: Record<string, string>;
 	contextFiles: Array<{ path: string; content: string }>;
 	skills: Skill[];
+	memoryPrompt: string;
 };
 
 /**
@@ -73,6 +76,7 @@ export function normalizeBuildSystemPromptOptions(input: BuildSystemPromptOption
 		cwd: input.cwd,
 		contextFiles: (input.contextFiles ?? []).map((file) => ({ ...file })),
 		skills: (input.skills ?? []).map((skill) => ({ ...skill })),
+		memoryPrompt: input.memoryPrompt ?? "",
 	};
 }
 
@@ -139,6 +143,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 		cwd,
 		contextFiles,
 		skills,
+		memoryPrompt,
 	} = options;
 
 	for (const name of Object.keys(customSections)) {
@@ -170,6 +175,17 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 
 	if (appendSystemPrompt) promptSections.addendum = appendSystemPrompt;
 	if (contextFiles.length > 0) promptSections.project_context = renderProjectContext(contextFiles);
+	if (memoryPrompt.trim()) promptSections.agent_memory = memoryPrompt.trim();
+	if (declaredTools.includes("memory")) {
+		promptSections.self_reflection = [
+			"You have durable memory across sessions (`memory` tool) split into `project` (current repo mistakes, pitfalls, build/test commands, invariants), `memory` (cross-project environment notes), and `user` (user preferences/style).",
+			"Automatically self-reflect and update `memory` whenever:",
+			"- You make a mistake, hit a non-obvious error, and figure out the root cause and fix.",
+			"- You discover project-specific build/test/deploy/lint commands, architecture rules, or gotchas.",
+			"- The user corrects you or states a lasting preference.",
+			"Write compact, actionable imperative rules + why (e.g. 'Run X before Y because Z'). Never store session logs, dates, or trivial facts. Consolidate or remove stale entries if near the char budget.",
+		].join("\n");
+	}
 	// A hidden reader is still reachable through another tool, so skills stay but the hint names no tool.
 	const readers = ["read", "bash"] as const;
 	const skillFileReadTool =

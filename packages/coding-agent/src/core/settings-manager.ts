@@ -90,7 +90,15 @@ function deepMergeObjects(base: Record<string, unknown>, overrides: Record<strin
 }
 
 /** Tools enabled at startup when `defaultTools` does not change them. */
-export const DEFAULT_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write", "web_search", "web_fetch"];
+export const DEFAULT_TOOL_NAMES: readonly string[] = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"memory",
+	"web_search",
+	"web_fetch",
+];
 
 /** Whether a tool selection entry is a `+name` or `-name` modifier. */
 export function isToolModifier(entry: unknown): boolean {
@@ -466,6 +474,11 @@ export class SettingsManager {
 	/** A copy of the effective settings: global and project settings merged, with overrides. */
 	getSettings(): Settings {
 		return structuredClone(this.settings);
+	}
+
+	/** Return the directory holding global settings, models, and memory files. */
+	getAgentDir(): string {
+		return this.settingsPaths.global ? dirname(this.settingsPaths.global) : getAgentDir();
 	}
 
 	getGlobalSettings(): Settings {

@@ -27,6 +27,8 @@ export interface CloudSyncBundle {
 	models?: Record<string, unknown>;
 	auth?: Record<string, unknown>;
 	keybindings?: Record<string, unknown>;
+	memory?: Record<string, unknown>;
+	projectMemories?: Record<string, SyncedFileEntry>;
 	skills?: Record<string, SyncedFileEntry>;
 	prompts?: Record<string, SyncedFileEntry>;
 	extensions?: Record<string, SyncedFileEntry>;
@@ -171,6 +173,8 @@ export function collectLocalSyncBundle(agentDir: string = getAgentDir()): CloudS
 		models: readJsonOptional(join(agentDir, "models.json")),
 		auth: readJsonOptional(join(agentDir, "auth.json")),
 		keybindings: readJsonOptional(join(agentDir, "keybindings.json")),
+		memory: readJsonOptional(join(agentDir, "memory.json")),
+		projectMemories: collectDirectoryFiles(join(agentDir, "projects")),
 		skills: collectDirectoryFiles(join(agentDir, "skills")),
 		prompts: collectDirectoryFiles(join(agentDir, "prompts")),
 		extensions: collectDirectoryFiles(join(agentDir, "extensions")),
@@ -190,6 +194,8 @@ export function applyRemoteSyncBundle(
 	if (bundle.models) writeJsonSafe(join(agentDir, "models.json"), bundle.models, 0o644);
 	if (bundle.auth) writeJsonSafe(join(agentDir, "auth.json"), bundle.auth, 0o600);
 	if (bundle.keybindings) writeJsonSafe(join(agentDir, "keybindings.json"), bundle.keybindings, 0o644);
+	if (bundle.memory) writeJsonSafe(join(agentDir, "memory.json"), bundle.memory, 0o644);
+	if (bundle.projectMemories) applyDirectoryFiles(join(agentDir, "projects"), bundle.projectMemories);
 	const skillFiles = applyDirectoryFiles(join(agentDir, "skills"), bundle.skills);
 	const promptFiles = applyDirectoryFiles(join(agentDir, "prompts"), bundle.prompts);
 	const extensionFiles =

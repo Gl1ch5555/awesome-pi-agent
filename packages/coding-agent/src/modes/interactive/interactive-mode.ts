@@ -127,6 +127,7 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
+import { clearMemoryTarget, countMemoryChars, MEMORY_CHAR_LIMITS, readMemorySnapshot } from "../../core/memory-store.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -3453,6 +3454,12 @@ export class InteractiveMode {
 				await this.handleVoiceCommand(arg || undefined);
 				return;
 			}
+			if (text === "/memory" || text.startsWith("/memory ")) {
+				const arg = text.slice("/memory".length).trim();
+				this.editor.setText("");
+				await this.handleMemoryCommand(arg || undefined);
+				return;
+			}
 			if (text === "/sync" || text.startsWith("/sync ")) {
 				const arg = text.slice("/sync".length).trim();
 				this.editor.setText("");
@@ -3921,6 +3928,9 @@ export class InteractiveMode {
 
 			case "tool_execution_end": {
 				if (event.isError) this.maybeShowInstallChangeWarning();
+				if (!event.isError && event.toolName === "memory") {
+					this.triggerAutoSyncPush();
+				}
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError, durationMs: event.durationMs });
@@ -5556,6 +5566,42 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
+		this.ui.requestRender();
+	}
+
+	private async handleMemoryCommand(arg?: string): Promise<void> {
+		const cwd = this.sessionManager.getCwd();
+		const agentDir = this.settingsManager.getAgentDir();
+		if (arg && arg.startsWith("clear ")) {
+			const target = arg.slice("clear ".length).trim();
+			if (target === "project" || target === "memory" || target === "user") {
+				const res = clearMemoryTarget(target, { cwd, agentDir });
+				this.triggerAutoSyncPush();
+				this.showStatus(`Memory [${res.target}] cleared (${res.clearedCount} entries removed)`);
+				return;
+			}
+			this.showError("Usage: /memory [clear project|memory|user]");
+			return;
+		}
+		if (arg) {
+			this.showError("Usage: /memory [clear project|memory|user]");
+			return;
+		}
+
+		const snap = readMemorySnapshot({ cwd, agentDir });
+		const formatBlock = (label: string, entries: string[], limit: number) => {
+			const chars = countMemoryChars(entries);
+			const header = `${label} (${entries.length} entries, ${chars}/${limit} chars):`;
+			if (entries.length === 0) return `${header}\n  (empty)`;
+			return `${header}\n${entries.map((e) => `  - ${e}`).join("\n")}`;
+		};
+		const text = [
+			formatBlock(`Project (${snap.projectRoot})`, snap.project, MEMORY_CHAR_LIMITS.project),
+			formatBlock("Global memory", snap.memory, MEMORY_CHAR_LIMITS.memory),
+			formatBlock("User profile", snap.user, MEMORY_CHAR_LIMITS.user),
+		].join("\n\n");
+		this.chatContainer.addChild(new Spacer(1));
+		this.chatContainer.addChild(new Text(theme.fg("muted", text), this.outputPad, 0));
 		this.ui.requestRender();
 	}
 

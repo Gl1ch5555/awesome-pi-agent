@@ -376,6 +376,80 @@ describe("awesome-pi-agent customizations", () => {
 		}
 	});
 
+	it("stores per-project self-reflection lessons and global memory atomically and syncs them", async () => {
+		const { applyMemoryOperations, clearMemoryTarget, formatMemoryPromptSection, readMemorySnapshot } = await import(
+			"../src/core/memory-store.js"
+		);
+		const { createMemoryToolDefinition } = await import("../src/core/tools/memory.js");
+
+		const agentDir = join(tempDir, "agent");
+		const projA = join(tempDir, "repo-a");
+		const projASub = join(projA, "packages", "web");
+		const projB = join(tempDir, "repo-b");
+		mkdirSync(join(projA, ".git"), { recursive: true });
+		mkdirSync(projASub, { recursive: true });
+		mkdirSync(projB, { recursive: true });
+
+		const tool = createMemoryToolDefinition(projASub, { getAgentDir: () => agentDir });
+		const r1 = await tool.execute(
+			"m1",
+			{
+				target: "project",
+				operations: [
+					{ action: "add", content: "Run npm run generate:schemas after editing settings-schema.ts" },
+					{ action: "add", content: "Never import server code in client bundle" },
+				],
+			},
+			undefined,
+			undefined,
+			{ cwd: projASub } as never,
+		);
+		expect(r1.isError).toBeFalsy();
+
+		// Subdir of repo-a shares project memory with repo-a root, repo-b is isolated
+		const snapA = readMemorySnapshot({ cwd: projA, agentDir });
+		const snapB = readMemorySnapshot({ cwd: projB, agentDir });
+		expect(snapA.project).toHaveLength(2);
+		expect(snapB.project).toHaveLength(0);
+
+		const patched = applyMemoryOperations(
+			"project",
+			[
+				{
+					action: "patch",
+					old_text: "Never import server code in client bundle",
+					content: "Keep server-only deps out of client bundle — Vite fails on node:fs",
+				},
+			],
+			{ cwd: projA, agentDir },
+		);
+		expect(patched.ok).toBe(true);
+		expect(patched.entries[1]).toContain("Vite fails");
+
+		applyMemoryOperations("user", [{ action: "add", content: "Prefers Russian replies" }], {
+			cwd: projA,
+			agentDir,
+		});
+		const prompt = formatMemoryPromptSection({ cwd: projA, agentDir });
+		expect(prompt).toContain("PROJECT LESSONS");
+		expect(prompt).toContain("USER PREFERENCES");
+		expect(prompt).toContain("generate:schemas");
+
+		// Cloud sync includes memory.json and projects/*/lessons.json
+		const bundle = collectLocalSyncBundle(agentDir);
+		expect(bundle.memory).toBeDefined();
+		expect(Object.keys(bundle.projectMemories ?? {}).length).toBeGreaterThanOrEqual(1);
+
+		const restoredDir = join(tempDir, "restored-agent");
+		applyRemoteSyncBundle(bundle, restoredDir);
+		const restoredSnap = readMemorySnapshot({ cwd: projA, agentDir: restoredDir });
+		expect(restoredSnap.project).toHaveLength(2);
+		expect(restoredSnap.user).toEqual(["Prefers Russian replies"]);
+
+		clearMemoryTarget("project", { cwd: projA, agentDir });
+		expect(readMemorySnapshot({ cwd: projA, agentDir }).project).toHaveLength(0);
+	});
+
 	it("renders footer without provider prefix even with multiple providers", () => {
 		initTheme("graphite");
 		const session = {
