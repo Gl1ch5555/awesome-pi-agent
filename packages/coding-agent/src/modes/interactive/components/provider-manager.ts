@@ -15,6 +15,7 @@ import {
 	type DiscoveredProviderModel,
 	deleteCustomProvider,
 	fetchProviderModelsCatalog,
+	inferModelMetadata,
 	listCustomProviders,
 	normalizeBaseUrl,
 	upsertCustomProvider,
@@ -419,8 +420,11 @@ export class ProviderManagerComponent extends Container implements Focusable {
 					const box = checked ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
 					const prefix = active ? theme.fg("accent", "> ") : "  ";
 					const idText = active ? theme.fg("accent", m.id) : theme.fg("text", m.id);
+					const ctxLabel = m.contextWindow >= 1_000_000 ? `${(m.contextWindow / 1_000_000).toFixed(1)}M` : `${Math.round(m.contextWindow / 1000)}k`;
+					const thinkLabel = m.reasoning ? "think" : "no-think";
+					const meta = theme.fg("dim", `  [${ctxLabel} · ${thinkLabel}]`);
 					const extra = m.name && m.name !== m.id ? theme.fg("dim", `  ${m.name}`) : "";
-					this.addChild(new Text(truncateToWidth(`${prefix}${box} ${idText}${extra}`, 100, "..."), 1, 0));
+					this.addChild(new Text(truncateToWidth(`${prefix}${box} ${idText}${meta}${extra}`, 100, "..."), 1, 0));
 				}
 			}
 
@@ -433,6 +437,8 @@ export class ProviderManagerComponent extends Container implements Focusable {
 			this.addChild(
 				new Text(
 					rawKeyHint("Space", "toggle") +
+						"  " +
+						rawKeyHint("Ctrl+T", "thinking") +
 						"  " +
 						rawKeyHint("Ctrl+S", "save") +
 						"  " +
@@ -671,6 +677,25 @@ export class ProviderManagerComponent extends Container implements Focusable {
 				void this.saveSelectedModels();
 				return;
 			}
+			if (data === "\x14") {
+				// Ctrl+T: toggle reasoning/thinking support for focused model
+				const model = this.filteredModels[this.checklistCursor - 2];
+				if (model) {
+					model.reasoning = !model.reasoning;
+					if (model.reasoning && !model.thinkingLevelMap) {
+						model.thinkingLevelMap = {
+							off: "off",
+							minimal: "minimal",
+							low: "low",
+							medium: "medium",
+							high: "high",
+							xhigh: "xhigh",
+						};
+					}
+					this.rebuild();
+				}
+				return;
+			}
 			if (data === "\x01") {
 				// Ctrl+A: toggle all visible
 				const allChecked =
@@ -744,14 +769,7 @@ export class ProviderManagerComponent extends Container implements Focusable {
 					this.rebuild();
 					return;
 				}
-				this.discoveredModels = ids.map((id) => ({
-					id,
-					name: id,
-					reasoning: false,
-					input: ["text"],
-					contextWindow: 128000,
-					maxTokens: 16384,
-				}));
+				this.discoveredModels = ids.map((id) => inferModelMetadata({ id }));
 				this.checkedIds = new Set(ids);
 				void this.saveSelectedModels();
 				return;

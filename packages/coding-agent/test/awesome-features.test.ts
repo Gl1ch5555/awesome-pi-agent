@@ -11,12 +11,14 @@ import {
 import {
 	deleteCustomProvider,
 	fetchProviderModelsCatalog,
+	inferModelMetadata,
 	listCustomProviders,
 	upsertCustomProvider,
 } from "../src/core/custom-providers.ts";
 import { checkGithubUpdate } from "../src/core/github-updater.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { createWebSearchToolDefinition, SEARCH_PROVIDERS } from "../src/core/tools/web-search.ts";
+import { FooterComponent } from "../src/modes/interactive/components/footer.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import {
 	extractMultipleImagePathsFromText,
@@ -203,16 +205,66 @@ describe("awesome-pi-agent customizations", () => {
 		expect(info?.shortSha).toBe("2222222");
 	});
 
-	it("persists and reloads the last selected defaultProvider and defaultModel", async () => {
+	it("persists and reloads the last selected defaultProvider, defaultModel, and thinking level", async () => {
 		const { SettingsManager } = await import("../src/core/settings-manager.js");
 		const agentDir = join(tempDir, "agent-persist");
 		mkdirSync(agentDir, { recursive: true });
 		const sm1 = SettingsManager.create(tempDir, agentDir);
 		sm1.setDefaultModelAndProvider("custom-openai", "gpt-5.4");
+		sm1.setDefaultThinkingLevel("high");
+		sm1.setModelThinkingLevel("custom-openai", "gpt-5.4", "xhigh");
 		await sm1.flush();
 
 		const sm2 = SettingsManager.create(tempDir, agentDir);
 		expect(sm2.getDefaultProvider()).toBe("custom-openai");
 		expect(sm2.getDefaultModel()).toBe("gpt-5.4");
+		expect(sm2.getDefaultThinkingLevel()).toBe("high");
+		expect(sm2.getModelThinkingLevel("custom-openai", "gpt-5.4")).toBe("xhigh");
+	});
+
+	it("auto-detects context window and thinking levels for modern models", () => {
+		const gemini = inferModelMetadata({ id: "gemini-4-hydrogen" });
+		expect(gemini.reasoning).toBe(true);
+		expect(gemini.contextWindow).toBe(1048576);
+		expect(gemini.thinkingLevelMap?.xhigh).toBe("xhigh");
+		expect(gemini.input).toContain("image");
+
+		const gpt5 = inferModelMetadata({ id: "gpt-5.4" });
+		expect(gpt5.reasoning).toBe(true);
+		expect(gpt5.contextWindow).toBe(400000);
+		expect(gpt5.thinkingLevelMap?.high).toBe("high");
+	});
+
+	it("renders footer without provider prefix even with multiple providers", () => {
+		initTheme("graphite");
+		const session = {
+			state: {
+				model: { id: "gemini-4-hydrogen", provider: "google", reasoning: true, contextWindow: 1048576 },
+				thinkingLevel: "high",
+			},
+			routedModel: undefined,
+			model: { id: "gemini-4-hydrogen", provider: "google", reasoning: true, contextWindow: 1048576 },
+			modelRuntime: { isUsingSubscription: () => false },
+			sessionManager: {
+				getCwd: () => "/tmp",
+				getEntryCount: () => 0,
+				getSessionId: () => "s1",
+				getLeafId: () => null,
+				getEntries: () => [],
+				getSessionName: () => undefined,
+			},
+			getContextUsage: () => ({ percent: 17.9, tokens: 187_000, contextWindow: 1048576 }),
+		} as any;
+		const footerData = {
+			getGitBranch: () => null,
+			getExtensionStatuses: () => new Map(),
+			getAvailableProviderCount: () => 5,
+		} as any;
+
+		const footer = new FooterComponent(session, footerData);
+		const lines = footer.render(100);
+		const plain = lines[1]!.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(plain).toContain("gemini-4-hydrogen • high");
+		expect(plain).not.toContain("(google)");
 	});
 });

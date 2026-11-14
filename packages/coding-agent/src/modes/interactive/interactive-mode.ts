@@ -4867,13 +4867,17 @@ export class InteractiveMode {
 	}
 
 	private cycleThinkingLevel(): void {
-		const newLevel = this.session.cycleThinkingLevel();
+		const newLevel = this.session.cycleThinkingLevel({ persist: true });
 		if (newLevel === undefined) {
 			this.showStatus("Current model does not support thinking");
 		} else {
+			if (this.session.model) {
+				this.settingsManager.setModelThinkingLevel(this.session.model.provider, this.session.model.id, newLevel);
+			}
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(`Thinking level: ${newLevel}`);
+			this.triggerAutoSyncPush();
 		}
 	}
 
