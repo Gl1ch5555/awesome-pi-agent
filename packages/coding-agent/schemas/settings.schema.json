@@ -662,7 +662,7 @@
           "type": "number",
           "minimum": 500,
           "maximum": 10000,
-          "default": 3500
+          "default": 5000
         }
       }
     },

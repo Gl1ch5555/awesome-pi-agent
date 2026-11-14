@@ -6,6 +6,9 @@ const PCM_BYTES_PER_SECOND = 16_000 * 2; // 16kHz * 16-bit mono
 const MAX_PREVIEW_WINDOW_BYTES = 25 * PCM_BYTES_PER_SECOND;
 const MAX_FINAL_CHUNK_BYTES = 240 * PCM_BYTES_PER_SECOND; // ~7.6 MB per WAV chunk
 
+/** Shared across voice sessions so hitting Groq RPM pauses live previews across back-to-back dictations. */
+let globalPreviewCooldownUntil = 0;
+
 export interface GroqTranscribeOptions {
 	wavBuffer: Buffer;
 	apiKey: string;
@@ -45,51 +48,68 @@ function parseGroqRetryAfterMs(res: Response, errText: string): number {
 }
 
 export async function transcribeAudioWithGroq(options: GroqTranscribeOptions): Promise<string> {
-	const maxAttempts = options.retryOnRateLimit ? 3 : 1;
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		const form = new FormData();
-		const blob = new Blob([new Uint8Array(options.wavBuffer)], { type: "audio/wav" });
-		form.append("file", blob, "voice.wav");
-		form.append("model", options.model ?? "whisper-large-v3");
-		form.append("response_format", "json");
-		if (options.language && options.language !== "auto") {
-			form.append("language", options.language);
-		}
-		if (options.prompt && options.prompt.trim().length > 0) {
-			form.append("prompt", options.prompt.trim().slice(-200));
-		}
+	const primaryModel: VoiceModel = options.model ?? "whisper-large-v3";
+	const modelsToTry: VoiceModel[] =
+		options.retryOnRateLimit && primaryModel !== "whisper-large-v3-turbo"
+			? [primaryModel, "whisper-large-v3-turbo"]
+			: [primaryModel];
+	const maxAttemptsPerModel = options.retryOnRateLimit ? 3 : 1;
 
-		const timeoutSignal = AbortSignal.timeout(25_000);
-		const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+	let lastRateLimitError: GroqRateLimitError | undefined;
 
-		const res = await fetch(GROQ_TRANSCRIPTION_URL, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${options.apiKey}`,
-			},
-			body: form,
-			signal,
-		});
-
-		if (res.ok) {
-			const data = (await res.json()) as { text?: string };
-			return (data.text ?? "").trim();
-		}
-
-		const errText = await res.text().catch(() => "");
-		if (res.status === 429) {
-			const retryAfterMs = parseGroqRetryAfterMs(res, errText);
-			if (attempt < maxAttempts && !options.signal?.aborted) {
-				await new Promise((r) => setTimeout(r, retryAfterMs));
-				continue;
+	for (const model of modelsToTry) {
+		for (let attempt = 1; attempt <= maxAttemptsPerModel; attempt++) {
+			const form = new FormData();
+			const blob = new Blob([new Uint8Array(options.wavBuffer)], { type: "audio/wav" });
+			form.append("file", blob, "voice.wav");
+			form.append("model", model);
+			form.append("response_format", "json");
+			if (options.language && options.language !== "auto") {
+				form.append("language", options.language);
 			}
-			throw new GroqRateLimitError(
-				`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`,
-				retryAfterMs,
-			);
+			if (options.prompt && options.prompt.trim().length > 0) {
+				form.append("prompt", options.prompt.trim().slice(-200));
+			}
+
+			const timeoutSignal = AbortSignal.timeout(25_000);
+			const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+
+			const res = await fetch(GROQ_TRANSCRIPTION_URL, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${options.apiKey}`,
+				},
+				body: form,
+				signal,
+			});
+
+			if (res.ok) {
+				const data = (await res.json()) as { text?: string };
+				return (data.text ?? "").trim();
+			}
+
+			const errText = await res.text().catch(() => "");
+			if (res.status === 429) {
+				const retryAfterMs = parseGroqRetryAfterMs(res, errText);
+				globalPreviewCooldownUntil = Math.max(
+					globalPreviewCooldownUntil,
+					Date.now() + Math.max(25_000, retryAfterMs),
+				);
+				lastRateLimitError = new GroqRateLimitError(
+					`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`,
+					retryAfterMs,
+				);
+				if (attempt < maxAttemptsPerModel && !options.signal?.aborted) {
+					await new Promise((r) => setTimeout(r, retryAfterMs));
+					continue;
+				}
+				break;
+			}
+			throw new Error(`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`);
 		}
-		throw new Error(`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`);
 	}
+
+	if (lastRateLimitError) throw lastRateLimitError;
 	return "";
 }
 
@@ -159,7 +179,7 @@ export class LiveVoiceSession {
 			this.emitState("recording");
 		}, 90);
 
-		const intervalMs = Math.max(3000, this.options.chunkIntervalMs ?? 3500);
+		const intervalMs = Math.max(4000, this.options.chunkIntervalMs ?? 5000);
 		this.previewTimer = setInterval(() => {
 			void this.runPreviewChunk();
 		}, intervalMs);
@@ -178,11 +198,12 @@ export class LiveVoiceSession {
 
 	private async runPreviewChunk(): Promise<void> {
 		if (this.finished || this.previewInFlight) return;
-		if (Date.now() < this.previewRateLimitedUntil) return;
+		const now = Date.now();
+		if (now < this.previewRateLimitedUntil || now < globalPreviewCooldownUntil) return;
 		const pcm = this.recorder.getPcmBuffer();
-		// Wait until at least 0.8s of audio has arrived and at least 1s since last preview
-		if (pcm.length < PCM_BYTES_PER_SECOND * 0.8) return;
-		if (pcm.length - this.lastPreviewBytes < PCM_BYTES_PER_SECOND * 1.0) return;
+		// Wait until at least 1.5s of audio has arrived and at least 1.5s since last preview
+		if (pcm.length < PCM_BYTES_PER_SECOND * 1.5) return;
+		if (pcm.length - this.lastPreviewBytes < PCM_BYTES_PER_SECOND * 1.5) return;
 
 		this.previewInFlight = true;
 		const controller = new AbortController();
@@ -244,21 +265,27 @@ export class LiveVoiceSession {
 		// Transcribe complete recording (split into sequential chunks only if > ~4 minutes)
 		const segments: string[] = [];
 		let promptHint = "";
-		for (let offset = 0; offset < pcm.length; offset += MAX_FINAL_CHUNK_BYTES) {
-			const slice = pcm.subarray(offset, Math.min(pcm.length, offset + MAX_FINAL_CHUNK_BYTES));
-			if (slice.length < PCM_BYTES_PER_SECOND * 0.2) continue;
-			const text = await transcribeAudioWithGroq({
-				wavBuffer: pcmToWav(slice),
-				apiKey: this.options.apiKey,
-				model: this.options.model,
-				language: this.options.language,
-				prompt: promptHint,
-				retryOnRateLimit: true,
-			});
-			if (text) {
-				segments.push(text);
-				promptHint = text;
+		try {
+			for (let offset = 0; offset < pcm.length; offset += MAX_FINAL_CHUNK_BYTES) {
+				const slice = pcm.subarray(offset, Math.min(pcm.length, offset + MAX_FINAL_CHUNK_BYTES));
+				if (slice.length < PCM_BYTES_PER_SECOND * 0.2) continue;
+				const text = await transcribeAudioWithGroq({
+					wavBuffer: pcmToWav(slice),
+					apiKey: this.options.apiKey,
+					model: this.options.model,
+					language: this.options.language,
+					prompt: promptHint,
+					retryOnRateLimit: true,
+				});
+				if (text) {
+					segments.push(text);
+					promptHint = text;
+				}
 			}
+		} catch (err) {
+			if (segments.length > 0) return segments.join(" ").trim();
+			if (this.partialText.trim()) return this.partialText.trim();
+			throw err;
 		}
 
 		return segments.join(" ").trim();

@@ -5774,7 +5774,7 @@ export class InteractiveMode {
 				apiKey,
 				model: voiceSettings.model ?? "whisper-large-v3",
 				language: voiceSettings.language ?? "auto",
-				chunkIntervalMs: voiceSettings.chunkIntervalMs ?? 1500,
+				chunkIntervalMs: voiceSettings.chunkIntervalMs ?? 5000,
 			},
 			{
 				onUpdate: (state) => {

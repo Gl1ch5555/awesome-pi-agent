@@ -69,7 +69,7 @@ export const SETTINGS_DEFAULTS = {
 		model: "whisper-large-v3",
 		language: "auto",
 		holdSpaceToTalk: true,
-		chunkIntervalMs: 3500,
+		chunkIntervalMs: 5000,
 	},
 	search: {
 		enabled: true,
