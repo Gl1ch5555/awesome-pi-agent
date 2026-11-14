@@ -90,6 +90,8 @@ try {
             $ExePath = Join-Path $StageDir "pi.exe"
             if (Test-Path $ExePath) {
                 if (Test-Path $AppDir) { Remove-Item -Recurse -Force $AppDir }
+                $VersionsDir = Join-Path $InstallRoot "versions"
+                if (Test-Path $VersionsDir) { Remove-Item -Recurse -Force $VersionsDir -ErrorAction SilentlyContinue }
                 Move-Item -Path $StageDir -Destination $AppDir
                 $PrebuiltOk = $true
                 Write-Ok "Installed prebuilt binary into $AppDir"

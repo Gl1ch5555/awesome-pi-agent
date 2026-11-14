@@ -1,5 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getPackageDir } from "../config.ts";
@@ -184,12 +194,12 @@ export async function checkGithubUpdate(currentVersion: string): Promise<GithubU
 	};
 }
 
-function runCommand(cmd: string, args: string[], cwd: string): Promise<void> {
+function runCommand(cmd: string, args: string[], cwd: string, useShell = false): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const proc = spawn(cmd, args, {
 			cwd,
 			stdio: ["ignore", "pipe", "pipe"],
-			shell: process.platform === "win32",
+			shell: useShell,
 			windowsHide: true,
 		});
 		let errTail = "";
@@ -207,13 +217,65 @@ function runCommand(cmd: string, args: string[], cwd: string): Promise<void> {
 	});
 }
 
+function encodePowerShellCommand(script: string): string {
+	return Buffer.from(script, "utf16le").toString("base64");
+}
+
+function escapePowerShellSingleQuoted(value: string): string {
+	return value.replace(/'/g, "''");
+}
+
+async function extractWindowsZip(archivePath: string, destDir: string, cwd: string): Promise<void> {
+	try {
+		await runCommand("tar.exe", ["-xf", archivePath, "-C", destDir], cwd);
+		if (readdirSync(destDir).length > 0) return;
+	} catch {
+		// Fall back to PowerShell Expand-Archive if bsdtar is unavailable
+	}
+	const psScript = `Expand-Archive -LiteralPath '${escapePowerShellSingleQuoted(archivePath)}' -DestinationPath '${escapePowerShellSingleQuoted(destDir)}' -Force`;
+	await runCommand(
+		"powershell.exe",
+		["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodePowerShellCommand(psScript)],
+		cwd,
+	);
+}
+
+function cleanupOldWindowsVersions(installRoot: string, keepDir: string): void {
+	const activeDir = getPackageDir();
+	const versionsDir = join(installRoot, "versions");
+	if (existsSync(versionsDir)) {
+		try {
+			for (const entry of readdirSync(versionsDir, { withFileTypes: true })) {
+				if (!entry.isDirectory()) continue;
+				const candidate = join(versionsDir, entry.name);
+				if (candidate === keepDir || candidate === activeDir) continue;
+				try {
+					rmSync(candidate, { recursive: true, force: true });
+				} catch {
+					// Still locked by another running pi-awesome process
+				}
+			}
+		} catch {
+			// ignore
+		}
+	}
+	const legacyAppDir = join(installRoot, "app");
+	if (existsSync(legacyAppDir) && legacyAppDir !== keepDir && legacyAppDir !== activeDir) {
+		try {
+			rmSync(legacyAppDir, { recursive: true, force: true });
+		} catch {
+			// Still locked by the current running process; cleaned on next update
+		}
+	}
+}
+
 async function tryUpdateFromPrebuiltRelease(
 	installRoot: string,
 	headers: Record<string, string>,
 	onProgress?: (stage: string) => void,
-): Promise<boolean> {
+): Promise<{ ok: true } | { ok: false; reason?: string }> {
 	const assetName = getPlatformReleaseAssetName();
-	if (!assetName) return false;
+	if (!assetName) return { ok: false, reason: `Unsupported platform ${process.platform}/${process.arch}` };
 
 	const tempDir = join(tmpdir(), `pi-awesome-bin-${Date.now()}`);
 	mkdirSync(tempDir, { recursive: true });
@@ -224,7 +286,7 @@ async function tryUpdateFromPrebuiltRelease(
 			headers,
 			signal: AbortSignal.timeout(90_000),
 		});
-		if (!res.ok) return false;
+		if (!res.ok) return { ok: false, reason: `HTTP ${res.status} ${res.statusText}` };
 
 		const archivePath = join(tempDir, assetName);
 		writeFileSync(archivePath, Buffer.from(await res.arrayBuffer()));
@@ -234,37 +296,32 @@ async function tryUpdateFromPrebuiltRelease(
 
 		onProgress?.("Extracting prebuilt binary...");
 		const appDir = join(installRoot, "app");
+		let targetExeDir = appDir;
 		if (process.platform === "win32") {
-			await runCommand(
-				"powershell.exe",
-				["-NoProfile", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${stageDir}' -Force`],
-				tempDir,
-			);
+			await extractWindowsZip(archivePath, stageDir, tempDir);
 			const stagedExe = join(stageDir, "pi.exe");
-			if (!existsSync(stagedExe)) return false;
+			if (!existsSync(stagedExe)) {
+				return { ok: false, reason: "Archive did not contain pi.exe" };
+			}
 
-			const existingExe = join(appDir, "pi.exe");
-			const backupExe = join(appDir, "pi.exe.old");
-			if (existsSync(backupExe)) {
-				try {
-					rmSync(backupExe, { force: true });
-				} catch {
-					// ignore
-				}
+			// Install side-by-side under versions/<timestamp> so running pi.exe and loaded
+			// native/*.node binaries are never overwritten in place on Windows.
+			const versionedDir = join(installRoot, "versions", `${Date.now()}`);
+			mkdirSync(dirname(versionedDir), { recursive: true });
+			try {
+				renameSync(stageDir, versionedDir);
+			} catch {
+				mkdirSync(versionedDir, { recursive: true });
+				cpSync(stageDir, versionedDir, { recursive: true, force: true });
 			}
-			if (existsSync(existingExe)) {
-				try {
-					renameSync(existingExe, backupExe);
-				} catch {
-					// ignore
-				}
-			}
-			mkdirSync(appDir, { recursive: true });
-			cpSync(stageDir, appDir, { recursive: true, force: true });
+			targetExeDir = versionedDir;
+			cleanupOldWindowsVersions(installRoot, targetExeDir);
 		} else {
 			await runCommand("tar", ["-xzf", archivePath, "-C", stageDir], tempDir);
 			const extractedApp = join(stageDir, "pi");
-			if (!existsSync(join(extractedApp, "pi"))) return false;
+			if (!existsSync(join(extractedApp, "pi"))) {
+				return { ok: false, reason: "Archive did not contain pi binary" };
+			}
 
 			const backupDir = join(installRoot, "app.old");
 			rmSync(backupDir, { recursive: true, force: true });
@@ -279,7 +336,7 @@ async function tryUpdateFromPrebuiltRelease(
 		const binDir = process.env.PI_BIN_DIR?.trim() || join(homedir(), ".local", "bin");
 		mkdirSync(binDir, { recursive: true });
 		if (process.platform === "win32") {
-			const appExe = join(appDir, "pi.exe");
+			const appExe = join(targetExeDir, "pi.exe");
 			writeFileSync(join(binDir, "pi-awesome.cmd"), `@echo off\r\n"${appExe}" %*\r\n`, "ascii");
 			writeFileSync(join(binDir, "pi-awesome.ps1"), `#!/usr/bin/env pwsh\n& "${appExe}" @args\n`, "utf8");
 		} else {
@@ -287,9 +344,9 @@ async function tryUpdateFromPrebuiltRelease(
 			writeFileSync(targetBin, `#!/usr/bin/env bash\nexec "${join(appDir, "pi")}" "$@"\n`, "utf8");
 			chmodSync(targetBin, 0o755);
 		}
-		return true;
-	} catch {
-		return false;
+		return { ok: true };
+	} catch (err) {
+		return { ok: false, reason: err instanceof Error ? err.message : String(err) };
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });
 	}
@@ -317,7 +374,8 @@ export async function performGithubSelfUpdate(
 	const newSha = check?.remoteSha ?? "main";
 	const newVer = check?.remoteVersion ?? currentVersion;
 
-	if (await tryUpdateFromPrebuiltRelease(installRoot, headers, onProgress)) {
+	const prebuilt = await tryUpdateFromPrebuiltRelease(installRoot, headers, onProgress);
+	if (prebuilt.ok) {
 		writeInstalledSha(newSha, newVer);
 		return {
 			updated: true,
@@ -329,7 +387,10 @@ export async function performGithubSelfUpdate(
 
 	const srcDir = join(installRoot, "src");
 	if (!existsSync(srcDir)) {
-		throw new Error("Prebuilt release unavailable and local source directory not found. Run the installer script.");
+		const detail = prebuilt.reason ? ` (${prebuilt.reason})` : "";
+		throw new Error(
+			`Prebuilt release update failed${detail} and local source directory not found. Run the installer script.`,
+		);
 	}
 
 	const tempDir = join(tmpdir(), `pi-awesome-update-${Date.now()}`);
@@ -351,20 +412,9 @@ export async function performGithubSelfUpdate(
 		const extractDir = join(tempDir, "extracted");
 		mkdirSync(extractDir, { recursive: true });
 		if (isWin) {
-			await runCommand(
-				"powershell.exe",
-				["-NoProfile", "-Command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${extractDir}' -Force`],
-				tempDir,
-			);
-			const entries = execFileSync(
-				"powershell.exe",
-				[
-					"-NoProfile",
-					"-Command",
-					`(Get-ChildItem -Path '${extractDir}' -Directory | Select-Object -First 1).FullName`,
-				],
-				{ encoding: "utf8" },
-			).trim();
+			await extractWindowsZip(archivePath, extractDir, tempDir);
+			const firstDir = readdirSync(extractDir, { withFileTypes: true }).find((e) => e.isDirectory())?.name;
+			const entries = firstDir ? join(extractDir, firstDir) : "";
 			if (!entries) throw new Error("Empty update archive");
 			await runCommand(
 				"robocopy",
@@ -376,9 +426,10 @@ export async function performGithubSelfUpdate(
 		}
 
 		onProgress?.("Installing dependencies & building...");
-		await runCommand("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], srcDir);
-		await runCommand("npm", ["run", "hydrate:model-data"], srcDir).catch(() => {});
-		await runCommand("npm", ["run", "build:offline"], srcDir);
+		const npmCmd = isWin ? "npm.cmd" : "npm";
+		await runCommand(npmCmd, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], srcDir, isWin);
+		await runCommand(npmCmd, ["run", "hydrate:model-data"], srcDir, isWin).catch(() => {});
+		await runCommand(npmCmd, ["run", "build:offline"], srcDir, isWin);
 
 		writeInstalledSha(newSha, newVer);
 		return {
