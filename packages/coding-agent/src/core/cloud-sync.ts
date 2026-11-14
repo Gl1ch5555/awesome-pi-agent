@@ -29,6 +29,11 @@ export interface CloudSyncBundle {
 	keybindings?: Record<string, unknown>;
 	skills?: Record<string, SyncedFileEntry>;
 	prompts?: Record<string, SyncedFileEntry>;
+	extensions?: Record<string, SyncedFileEntry>;
+	themes?: Record<string, SyncedFileEntry>;
+	tools?: Record<string, SyncedFileEntry>;
+	plugins?: Record<string, SyncedFileEntry>;
+	gitPackages?: Record<string, SyncedFileEntry>;
 }
 
 export function getSyncStatePath(agentDir: string = getAgentDir()): string {
@@ -168,13 +173,18 @@ export function collectLocalSyncBundle(agentDir: string = getAgentDir()): CloudS
 		keybindings: readJsonOptional(join(agentDir, "keybindings.json")),
 		skills: collectDirectoryFiles(join(agentDir, "skills")),
 		prompts: collectDirectoryFiles(join(agentDir, "prompts")),
+		extensions: collectDirectoryFiles(join(agentDir, "extensions")),
+		themes: collectDirectoryFiles(join(agentDir, "themes")),
+		tools: collectDirectoryFiles(join(agentDir, "tools")),
+		plugins: collectDirectoryFiles(join(agentDir, "plugins")),
+		gitPackages: collectDirectoryFiles(join(agentDir, "git")),
 	};
 }
 
 export function applyRemoteSyncBundle(
 	bundle: CloudSyncBundle,
 	agentDir: string = getAgentDir(),
-): { skillFiles: number; promptFiles: number } {
+): { skillFiles: number; promptFiles: number; extensionFiles: number } {
 	if (!existsSync(agentDir)) mkdirSync(agentDir, { recursive: true });
 	if (bundle.settings) writeJsonSafe(join(agentDir, "settings.json"), bundle.settings, 0o644);
 	if (bundle.models) writeJsonSafe(join(agentDir, "models.json"), bundle.models, 0o644);
@@ -182,7 +192,13 @@ export function applyRemoteSyncBundle(
 	if (bundle.keybindings) writeJsonSafe(join(agentDir, "keybindings.json"), bundle.keybindings, 0o644);
 	const skillFiles = applyDirectoryFiles(join(agentDir, "skills"), bundle.skills);
 	const promptFiles = applyDirectoryFiles(join(agentDir, "prompts"), bundle.prompts);
-	return { skillFiles, promptFiles };
+	const extensionFiles =
+		applyDirectoryFiles(join(agentDir, "extensions"), bundle.extensions) +
+		applyDirectoryFiles(join(agentDir, "themes"), bundle.themes) +
+		applyDirectoryFiles(join(agentDir, "tools"), bundle.tools) +
+		applyDirectoryFiles(join(agentDir, "plugins"), bundle.plugins) +
+		applyDirectoryFiles(join(agentDir, "git"), bundle.gitPackages);
+	return { skillFiles, promptFiles, extensionFiles };
 }
 
 async function syncRequest(url: string, init: RequestInit): Promise<any> {
@@ -243,7 +259,9 @@ export async function syncLogout(agentDir: string = getAgentDir()): Promise<void
 	clearSyncState(agentDir);
 }
 
-export async function syncPush(agentDir: string = getAgentDir()): Promise<{ updated: number; skillFiles: number }> {
+export async function syncPush(
+	agentDir: string = getAgentDir(),
+): Promise<{ updated: number; skillFiles: number; extensionFiles: number }> {
 	const state = readSyncState(agentDir);
 	if (!state) throw new Error("Not signed in to Cloud Sync.");
 	const bundle = collectLocalSyncBundle(agentDir);
@@ -257,12 +275,18 @@ export async function syncPush(agentDir: string = getAgentDir()): Promise<{ upda
 	});
 	const updated = Number(res.updated || Date.now());
 	writeSyncState({ ...state, lastSyncUpdated: updated }, agentDir);
-	return { updated, skillFiles: Object.keys(bundle.skills ?? {}).length };
+	const extensionFiles =
+		Object.keys(bundle.extensions ?? {}).length +
+		Object.keys(bundle.themes ?? {}).length +
+		Object.keys(bundle.tools ?? {}).length +
+		Object.keys(bundle.plugins ?? {}).length +
+		Object.keys(bundle.gitPackages ?? {}).length;
+	return { updated, skillFiles: Object.keys(bundle.skills ?? {}).length, extensionFiles };
 }
 
 export async function syncPull(
 	agentDir: string = getAgentDir(),
-): Promise<{ hasData: boolean; updated: number; skillFiles: number; promptFiles: number }> {
+): Promise<{ hasData: boolean; updated: number; skillFiles: number; promptFiles: number; extensionFiles: number }> {
 	const state = readSyncState(agentDir);
 	if (!state) throw new Error("Not signed in to Cloud Sync.");
 	const res = await syncRequest(`${state.serverUrl}/data`, {
@@ -271,7 +295,7 @@ export async function syncPull(
 	});
 	const updated = Number(res.updated || 0);
 	if (!res.data || typeof res.data !== "object") {
-		return { hasData: false, updated, skillFiles: 0, promptFiles: 0 };
+		return { hasData: false, updated, skillFiles: 0, promptFiles: 0, extensionFiles: 0 };
 	}
 	const applied = applyRemoteSyncBundle(res.data as CloudSyncBundle, agentDir);
 	writeSyncState({ ...state, lastSyncUpdated: updated }, agentDir);
@@ -280,7 +304,7 @@ export async function syncPull(
 
 export async function syncAutoOnStartup(
 	agentDir: string = getAgentDir(),
-): Promise<{ action: "none" | "pulled" | "pushed" | "up-to-date"; skillFiles?: number }> {
+): Promise<{ action: "none" | "pulled" | "pushed" | "up-to-date"; skillFiles?: number; extensionFiles?: number }> {
 	const state = readSyncState(agentDir);
 	if (!state || !state.autoSync) return { action: "none" };
 	const res = await syncRequest(`${state.serverUrl}/data`, {
@@ -290,12 +314,12 @@ export async function syncAutoOnStartup(
 	const remoteUpdated = Number(res.updated || 0);
 	if (!res.data || remoteUpdated === 0) {
 		const pushed = await syncPush(agentDir);
-		return { action: "pushed", skillFiles: pushed.skillFiles };
+		return { action: "pushed", skillFiles: pushed.skillFiles, extensionFiles: pushed.extensionFiles };
 	}
 	if (remoteUpdated > state.lastSyncUpdated) {
 		const applied = applyRemoteSyncBundle(res.data as CloudSyncBundle, agentDir);
 		writeSyncState({ ...state, lastSyncUpdated: remoteUpdated }, agentDir);
-		return { action: "pulled", skillFiles: applied.skillFiles };
+		return { action: "pulled", skillFiles: applied.skillFiles, extensionFiles: applied.extensionFiles };
 	}
 	return { action: "up-to-date" };
 }

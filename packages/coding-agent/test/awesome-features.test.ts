@@ -143,23 +143,33 @@ describe("awesome-pi-agent customizations", () => {
 		expect((out.content[0] as { text: string }).text).toContain("https://pi.dev");
 	});
 
-	it("collects and restores cloud sync bundle including settings, keys, models, and skills", () => {
+	it("collects and restores cloud sync bundle including settings, keys, models, skills, and plugins/extensions", () => {
 		const srcAgentDir = join(tempDir, "src-agent");
 		const dstAgentDir = join(tempDir, "dst-agent");
 		const skillDir = join(srcAgentDir, "skills", "my-skill");
+		const extDir = join(srcAgentDir, "extensions", "my-plugin");
+		const themeDir = join(srcAgentDir, "themes");
 		mkdirSync(skillDir, { recursive: true });
-		writeFileSync(join(srcAgentDir, "settings.json"), JSON.stringify({ theme: "graphite" }));
+		mkdirSync(extDir, { recursive: true });
+		mkdirSync(themeDir, { recursive: true });
+		writeFileSync(join(srcAgentDir, "settings.json"), JSON.stringify({ theme: "graphite", packages: ["npm:my-pkg"] }));
 		writeFileSync(join(srcAgentDir, "models.json"), JSON.stringify({ providers: { test: { baseUrl: "http://x" } } }));
 		writeFileSync(join(srcAgentDir, "auth.json"), JSON.stringify({ groq: { key: "gsk_test" } }));
 		writeFileSync(join(skillDir, "SKILL.md"), "# My Skill\nhello");
+		writeFileSync(join(extDir, "index.ts"), "export default function () {}");
+		writeFileSync(join(themeDir, "custom.json"), "{}");
 
 		const bundle = collectLocalSyncBundle(srcAgentDir);
 		expect(bundle.settings?.theme).toBe("graphite");
 		expect(bundle.skills?.["my-skill/SKILL.md"]?.content).toContain("My Skill");
+		expect(bundle.extensions?.["my-plugin/index.ts"]?.content).toContain("export default");
 
 		const applied = applyRemoteSyncBundle(bundle, dstAgentDir);
 		expect(applied.skillFiles).toBe(1);
+		expect(applied.extensionFiles).toBe(2);
 		expect(readFileSync(join(dstAgentDir, "skills", "my-skill", "SKILL.md"), "utf8")).toContain("My Skill");
+		expect(readFileSync(join(dstAgentDir, "extensions", "my-plugin", "index.ts"), "utf8")).toContain("export default");
+		expect(readFileSync(join(dstAgentDir, "themes", "custom.json"), "utf8")).toBe("{}");
 		expect(readFileSync(join(dstAgentDir, "auth.json"), "utf8")).toContain("gsk_test");
 
 		writeSyncState(
@@ -191,5 +201,18 @@ describe("awesome-pi-agent customizations", () => {
 		const info = await checkGithubUpdate("1.5.2");
 		expect(info?.hasUpdate).toBe(true);
 		expect(info?.shortSha).toBe("2222222");
+	});
+
+	it("persists and reloads the last selected defaultProvider and defaultModel", async () => {
+		const { SettingsManager } = await import("../src/core/settings-manager.js");
+		const agentDir = join(tempDir, "agent-persist");
+		mkdirSync(agentDir, { recursive: true });
+		const sm1 = SettingsManager.create(tempDir, agentDir);
+		sm1.setDefaultModelAndProvider("custom-openai", "gpt-5.4");
+		await sm1.flush();
+
+		const sm2 = SettingsManager.create(tempDir, agentDir);
+		expect(sm2.getDefaultProvider()).toBe("custom-openai");
+		expect(sm2.getDefaultModel()).toBe("gpt-5.4");
 	});
 });

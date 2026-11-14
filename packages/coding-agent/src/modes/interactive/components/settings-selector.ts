@@ -824,7 +824,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "cloud-sync",
 				label: "Cloud sync (/sync)",
-				description: "Sync settings, API keys, models, and skills by login & password",
+				description: "Sync settings, API keys, models, skills, and plugins by login & password",
 				currentValue: config.syncUser ? `signed in (${config.syncUser})` : "not signed in",
 				values: ["open"],
 			},

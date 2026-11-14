@@ -65,7 +65,7 @@ export class SyncManagerComponent extends Container implements Focusable {
 			];
 		}
 		return [
-			"Push local -> Cloud (settings, API keys, models, skills)",
+			"Push local -> Cloud (settings, keys, models, skills, plugins)",
 			"Pull Cloud -> local",
 			`Auto-sync: ${this.state.autoSync ? "on" : "off"}`,
 			"Sign out",
@@ -97,7 +97,7 @@ export class SyncManagerComponent extends Container implements Focusable {
 			);
 		} else {
 			this.addChild(
-				new Text(theme.fg("muted", "Sync settings, API keys, custom models, and skills across devices."), 1, 0),
+				new Text(theme.fg("muted", "Sync settings, API keys, models, skills, and plugins across devices."), 1, 0),
 			);
 		}
 		this.addChild(new Spacer(1));
@@ -196,7 +196,7 @@ export class SyncManagerComponent extends Container implements Focusable {
 				this.statusMessage = "Cloud account has no saved backup yet. Use Push first.";
 			} else {
 				await this.callbacks.onPulled();
-				this.statusMessage = `Pulled from cloud (${res.skillFiles} skill files, ${res.promptFiles} prompts)`;
+				this.statusMessage = `Pulled from cloud (${res.skillFiles} skills, ${res.extensionFiles} plugins, ${res.promptFiles} prompts)`;
 			}
 		} catch (error) {
 			this.statusMessage = "";

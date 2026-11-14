@@ -1243,7 +1243,9 @@ export class InteractiveMode {
 			.then(async (res) => {
 				if (res.action === "pulled") {
 					await this.applySyncedConfiguration();
-					this.showStatus(`Cloud sync: restored settings & skills (${res.skillFiles ?? 0} files)`);
+					this.showStatus(
+						`Cloud sync: restored settings, skills (${res.skillFiles ?? 0}) & plugins (${res.extensionFiles ?? 0})`,
+					);
 				}
 			})
 			.catch(() => {});
@@ -4877,7 +4879,7 @@ export class InteractiveMode {
 
 	private async cycleModel(direction: "forward" | "backward"): Promise<void> {
 		try {
-			const result = await this.session.cycleModel(direction);
+			const result = await this.session.cycleModel(direction, { persist: true });
 			if (result === undefined) {
 				const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
 				this.showStatus(msg);
@@ -4887,6 +4889,7 @@ export class InteractiveMode {
 				const thinkingStr =
 					result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
 				this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
+				this.triggerAutoSyncPush();
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
 			}
 		} catch (error) {
@@ -5570,7 +5573,9 @@ export class InteractiveMode {
 			this.showStatus("Cloud sync: pushing...");
 			try {
 				const res = await syncPush();
-				this.showStatus(`Cloud sync: pushed (${res.skillFiles} skill files)`);
+				this.showStatus(
+					`Cloud sync: pushed (${res.skillFiles} skills, ${res.extensionFiles} plugin/theme files)`,
+				);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
@@ -5584,7 +5589,9 @@ export class InteractiveMode {
 					this.showStatus("Cloud sync: no remote backup yet");
 				} else {
 					await this.applySyncedConfiguration();
-					this.showStatus(`Cloud sync: pulled (${res.skillFiles} skill files, ${res.promptFiles} prompts)`);
+					this.showStatus(
+						`Cloud sync: pulled (${res.skillFiles} skills, ${res.extensionFiles} plugins, ${res.promptFiles} prompts)`,
+					);
 				}
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
@@ -5626,7 +5633,7 @@ export class InteractiveMode {
 						if (!this.session.model && modelIds[0]) {
 							const firstModel = this.session.modelRuntime.getModel(providerId, modelIds[0]);
 							if (firstModel) {
-								await this.session.setModel(firstModel, { persist: false });
+								await this.session.setModel(firstModel, { persist: true });
 							}
 						}
 						this.footer.invalidate();
@@ -5835,10 +5842,11 @@ export class InteractiveMode {
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
-				await this.session.setModel(model, { persist: false });
+				await this.session.setModel(model, { persist: true });
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
+				this.showStatus(`Model: ${model.provider}/${model.id}`);
+				this.triggerAutoSyncPush();
 				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
@@ -5976,14 +5984,15 @@ export class InteractiveMode {
 
 	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
-			const selectModel = async (model: Model<any>, persist: boolean) => {
+			const selectModel = async (model: Model<any>, persist = true) => {
 				try {
 					await this.session.setModel(model, { persist });
 					this.updateAvailableProviderCount();
 					this.footer.invalidate();
 					this.updateEditorBorderColor();
 					done();
-					this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
+					this.showStatus(`Model: ${model.provider}/${model.id}`);
+					this.triggerAutoSyncPush();
 					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
 				} catch (error) {
 					done();
@@ -5997,7 +6006,7 @@ export class InteractiveMode {
 				this.session.model,
 				this.session.modelRuntime,
 				this.session.scopedModels,
-				(model) => selectModel(model, false),
+				(model) => selectModel(model, true),
 				() => {
 					done();
 					this.ui.requestRender();
