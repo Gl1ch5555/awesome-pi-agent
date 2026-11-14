@@ -1813,6 +1813,8 @@ export class AgentSession {
 			cwd: this._cwd,
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
+			// Freeze persistent memory snapshot at session start so mid-session `memory` writes
+			// never mutate the leading system prompt prefix and break LLM prompt caching.
 			memoryPrompt: formatMemoryPromptSection({ cwd: this._cwd, agentDir: this.settingsManager.getAgentDir() }),
 			customPrompt: loaderSystemPrompt,
 			appendSystemPrompt,
@@ -1820,14 +1822,6 @@ export class AgentSession {
 			hiddenTools: [...this._hiddenDeclarations],
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
-		});
-	}
-
-	private _refreshMemoryPromptSection(): void {
-		if (!this._baseSystemPromptOptions) return;
-		this._baseSystemPromptOptions.memoryPrompt = formatMemoryPromptSection({
-			cwd: this._cwd,
-			agentDir: this.settingsManager.getAgentDir(),
 		});
 	}
 
@@ -1845,10 +1839,6 @@ export class AgentSession {
 		options: NormalizedBuildSystemPromptOptions,
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
-		options.memoryPrompt = formatMemoryPromptSection({
-			cwd: this._cwd,
-			agentDir: this.settingsManager.getAgentDir(),
-		});
 		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
 		// The tool list and rules must match the declarations the request carries.
 		options.hiddenTools = [...this._hiddenDeclarations];
@@ -3805,7 +3795,6 @@ export class AgentSession {
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
 					memory: {
 						getAgentDir: () => this.settingsManager.getAgentDir(),
-						onUpdated: () => this._refreshMemoryPromptSection(),
 					},
 					webSearch: { getSettings: () => this.settingsManager.getSearchSettings() },
 					webFetch: { getSettings: () => this.settingsManager.getSearchSettings() },

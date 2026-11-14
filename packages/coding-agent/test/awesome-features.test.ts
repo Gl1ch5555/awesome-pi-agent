@@ -450,6 +450,73 @@ describe("awesome-pi-agent customizations", () => {
 		expect(readMemorySnapshot({ cwd: projA, agentDir }).project).toHaveLength(0);
 	});
 
+	it("freezes system prompt memory snapshot mid-session to preserve LLM prompt caching", async () => {
+		const { createAgentSession } = await import("../src/core/sdk.js");
+		const { SettingsManager } = await import("../src/core/settings-manager.js");
+		const { SessionManager } = await import("../src/core/session-manager.js");
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const { applyMemoryOperations } = await import("../src/core/memory-store.js");
+
+		const projDir = join(tempDir, "cached-proj");
+		const agentDir = join(tempDir, "cached-agent");
+		mkdirSync(join(projDir, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+
+		applyMemoryOperations("project", [{ action: "add", content: "Initial rule: use pnpm" }], {
+			cwd: projDir,
+			agentDir,
+		});
+
+		const createTestSession = async () => {
+			const settingsManager = SettingsManager.create(projDir, agentDir);
+			const resourceLoader = new DefaultResourceLoader({
+				cwd: projDir,
+				agentDir,
+				settingsManager,
+				noExtensions: true,
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			});
+			await resourceLoader.reload();
+			return createAgentSession({
+				cwd: projDir,
+				agentDir,
+				settingsManager,
+				sessionManager: SessionManager.inMemory(projDir),
+				resourceLoader,
+			});
+		};
+
+		const { session: s1 } = await createTestSession();
+		const promptBefore = s1.systemPrompt;
+		expect(promptBefore).toContain("Initial rule: use pnpm");
+
+		const prep = s1 as unknown as {
+			_baseSystemPromptOptions: unknown;
+			_preparePromptAndToolLoadout: (opts: unknown, messages?: unknown[]) => unknown;
+		};
+		const initialSysMsg = prep._preparePromptAndToolLoadout(prep._baseSystemPromptOptions, []);
+		expect(initialSysMsg).toBeDefined();
+
+		// Simulate mid-session memory write (as if the `memory` tool ran mid-turn)
+		applyMemoryOperations("project", [{ action: "add", content: "New rule added mid-session" }], {
+			cwd: projDir,
+			agentDir,
+		});
+
+		// Simulate next-turn loadout preparation in the same session: prefix must stay identical!
+		const turn2Diff = prep._preparePromptAndToolLoadout(prep._baseSystemPromptOptions, [initialSysMsg]);
+		expect(turn2Diff).toBeUndefined();
+		expect(s1.systemPrompt).toBe(promptBefore);
+
+		// A fresh session picks up the updated rule at index 0
+		const { session: s2 } = await createTestSession();
+		expect(s2.systemPrompt).toContain("New rule added mid-session");
+		s1.dispose();
+		s2.dispose();
+	});
+
 	it("renders footer without provider prefix even with multiple providers", () => {
 		initTheme("graphite");
 		const session = {
