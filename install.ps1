@@ -86,18 +86,62 @@ try {
                 }
             }
 
-            Expand-Archive -Path $ZipPath -DestinationPath $StageDir -Force
+            New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
+            Write-Info "Extracting $AssetName..."
+            $extracted = $false
+            if (Get-Command tar.exe -ErrorAction SilentlyContinue) {
+                try {
+                    $tarProc = Start-Process -FilePath "tar.exe" -ArgumentList @("-xf", "`"$ZipPath`"", "-C", "`"$StageDir`"") -NoNewWindow -Wait -PassThru
+                    if ($tarProc.ExitCode -eq 0 -and (Test-Path (Join-Path $StageDir "pi.exe"))) {
+                        $extracted = $true
+                    }
+                } catch {}
+            }
+            if (-not $extracted) {
+                Expand-Archive -Path $ZipPath -DestinationPath $StageDir -Force
+            }
+
             $ExePath = Join-Path $StageDir "pi.exe"
-            if (Test-Path $ExePath) {
-                if (Test-Path $AppDir) { Remove-Item -Recurse -Force $AppDir }
+            if (-not (Test-Path $ExePath)) {
+                throw "Prebuilt archive did not contain pi.exe"
+            }
+
+            $TargetDir = $AppDir
+            $InstalledInPlace = $false
+            for ($retry = 1; $retry -le 5; $retry++) {
+                try {
+                    if (Test-Path $AppDir) { Remove-Item -Recurse -Force $AppDir -ErrorAction Stop }
+                    Move-Item -Path $StageDir -Destination $AppDir -ErrorAction Stop
+                    $InstalledInPlace = $true
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds 350
+                }
+            }
+
+            if (-not $InstalledInPlace) {
+                # Running pi.exe or native/*.node is still open in another terminal; install side-by-side
+                $VersionsRoot = Join-Path $InstallRoot "versions"
+                New-Item -ItemType Directory -Force -Path $VersionsRoot | Out-Null
+                $TargetDir = Join-Path $VersionsRoot ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds().ToString())
+                Move-Item -Path $StageDir -Destination $TargetDir -ErrorAction Stop
+                Get-ChildItem -Path $VersionsRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $TargetDir } | ForEach-Object {
+                    Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue
+                }
+            } else {
                 $VersionsDir = Join-Path $InstallRoot "versions"
                 if (Test-Path $VersionsDir) { Remove-Item -Recurse -Force $VersionsDir -ErrorAction SilentlyContinue }
-                Move-Item -Path $StageDir -Destination $AppDir
-                $PrebuiltOk = $true
-                Write-Ok "Installed prebuilt binary into $AppDir"
             }
+
+            $AppExe = Join-Path $TargetDir "pi.exe"
+            $PrebuiltOk = $true
+            Write-Ok "Installed prebuilt binary into $TargetDir"
         } catch {
-            Write-Warn "Prebuilt release download failed, falling back to source build..."
+            $PrebuiltErr = $_.Exception.Message
+            if (-not $Source -and $env:PI_FORCE_SOURCE -ne "1") {
+                throw "Prebuilt install failed: $PrebuiltErr"
+            }
+            Write-Warn "Prebuilt release failed ($PrebuiltErr), falling back to source build..."
         }
     }
 
@@ -106,7 +150,7 @@ try {
 
     if ($PrebuiltOk) {
         Write-Step "3/3" "Linking $CmdName & saving version metadata"
-        $AppExe = Join-Path $AppDir "pi.exe"
+        if (-not $AppExe) { $AppExe = Join-Path $AppDir "pi.exe" }
 
         @"
 @echo off

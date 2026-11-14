@@ -37,13 +37,18 @@ export function normalizeNvidiaModelId(modelId: string): string {
 }
 
 async function fetchNvidiaModelIds(): Promise<Map<string, string>> {
-	const data = await fetchJson<{ data?: { id: string }[] }>(`${NVIDIA_BASE_URL}/models`, "NVIDIA NIM API");
-	const modelIds = new Map<string, string>();
-	for (const model of data.data ?? []) {
-		modelIds.set(model.id, model.id);
-		modelIds.set(normalizeNvidiaModelId(model.id), model.id);
+	try {
+		const data = await fetchJson<{ data?: { id: string }[] }>(`${NVIDIA_BASE_URL}/models`, "NVIDIA NIM API");
+		const modelIds = new Map<string, string>();
+		for (const model of data.data ?? []) {
+			modelIds.set(model.id, model.id);
+			modelIds.set(normalizeNvidiaModelId(model.id), model.id);
+		}
+		return modelIds;
+	} catch (error) {
+		console.warn("Skipping NVIDIA NIM live model probe (using models.dev metadata):", error);
+		return new Map<string, string>();
 	}
-	return modelIds;
 }
 
 async function fetchRadiusModels(): Promise<Model<"pi-messages">[]> {
