@@ -6,11 +6,11 @@ import { memoryRenderers } from "./renderers/memory.ts";
 
 const memoryOperationSchema = Type.Object({
 	action: Type.Union([Type.Literal("add"), Type.Literal("patch"), Type.Literal("remove")], {
-		description: "Operation type: add a new lesson/note, patch an existing entry, or remove a stale entry.",
+		description: "Operation type: add a new durable fact/note, patch an existing entry, or remove a stale entry.",
 	}),
 	content: Type.Optional(
 		Type.String({
-			description: "Required for 'add' and 'patch'. Concise imperative rule/fact (no dates or session logs).",
+			description: "Required for 'add' and 'patch'. Concise declarative fact (no dates or session logs).",
 		}),
 	),
 	old_text: Type.Optional(
@@ -23,7 +23,7 @@ const memoryOperationSchema = Type.Object({
 const memorySchema = Type.Object({
 	target: Type.Union([Type.Literal("project"), Type.Literal("memory"), Type.Literal("user")], {
 		description:
-			"'project' = mistakes, pitfalls, build/test commands & invariants for the current repo; 'memory' = cross-project environment notes; 'user' = user preferences & style.",
+			"'project' = current repo conventions, build/test commands & pitfalls; 'memory' = cross-project environment notes & tool quirks; 'user' = who the user is, communication style & standing preferences.",
 	}),
 	operations: Type.Array(memoryOperationSchema, {
 		minItems: 1,
@@ -52,13 +52,14 @@ export function createMemoryToolDefinition(
 		name: "memory",
 		label: "memory",
 		description:
-			"Save durable self-reflection lessons, project pitfalls/mistakes, and user preferences across sessions. " +
-			"Automatically record non-obvious root causes after fixing a mistake, project build/test quirks, and user corrections. " +
-			"Use target='project' for repo-specific lessons, 'memory' for global environment notes, and 'user' for user preferences.",
-		promptSnippet: "Record durable self-reflection lessons, project mistakes/pitfalls, and user preferences",
+			"Save durable facts across sessions, loaded into each new session's context. " +
+			"Call immediately when the user explicitly asks you to remember something or states a standing preference ('always', 'from now on', 'never'). " +
+			"Route each fact to ONE store only: 'project' (current repo rules, commands, pitfalls), 'memory' (global environment notes), or 'user' (user profile & preferences). " +
+			"Write declarative facts ('User prefers concise responses'), not directives ('Always respond concisely').",
+		promptSnippet: "Save durable cross-session facts, project rules, or user preferences when asked to remember",
 		promptGuidelines: [
-			"Self-reflect automatically via memory when you make a mistake and discover the fix, hit a non-obvious project quirk/build/test rule, or get corrected by the user.",
-			"Write compact, high-signal imperative rules with 'why' (e.g. 'Run npm run generate:schemas after editing settings-schema.ts — config-schemas.test.ts fails otherwise'), never dates or session logs.",
+			"Use memory when the user explicitly asks to remember something or states a lasting preference; periodic background review handles automatic reflection.",
+			"Write compact declarative facts (e.g. 'User prefers concise Russian replies', not 'Always reply concisely in Russian'), one fact per store, with no dates or session logs.",
 			"Consolidate or remove stale entries in the same operations batch if a target approaches its character limit.",
 		],
 		parameters: memorySchema,

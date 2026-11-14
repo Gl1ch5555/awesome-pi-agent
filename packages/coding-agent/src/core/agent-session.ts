@@ -82,6 +82,7 @@ import {
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
+import { type MemoryReviewResult, runMemoryReview } from "./memory-review.ts";
 import { formatMemoryPromptSection } from "./memory-store.ts";
 import {
 	type AgentActivityOutcome,
@@ -249,7 +250,8 @@ export type AgentSessionEvent =
 			reason: "manual" | "threshold" | "overflow";
 	  }
 	| { type: "summarization_retry_finished" }
-	| { type: "bash_execution_update"; id?: string; delta: string };
+	| { type: "bash_execution_update"; id?: string; delta: string }
+	| { type: "memory_review_end"; saved: boolean; changes: string[]; background: boolean; error?: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -518,6 +520,12 @@ export class AgentSession {
 	/** Prompt options after before_agent_start mutations for the active run. */
 	private _runSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
 
+	private _turnsSinceMemoryReview = 0;
+	private _memoryUsedInCurrentRun = false;
+	private _memoryReviewAbortController: AbortController | undefined;
+	private _memoryReviewPromise: Promise<MemoryReviewResult> | undefined;
+	private _disposed = false;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -559,6 +567,17 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 		if (this._usesDefaultTools) this._restoreToolsFromTranscript(this._defaultToolModifiers);
+		this._hydrateMemoryReviewCounter();
+	}
+
+	private _hydrateMemoryReviewCounter(): void {
+		const { nudgeInterval } = this.settingsManager.getMemorySettings();
+		if (nudgeInterval <= 0) {
+			this._turnsSinceMemoryReview = 0;
+			return;
+		}
+		const priorUserTurns = this.agent.state.messages.filter((m) => m.role === "user").length;
+		this._turnsSinceMemoryReview = priorUserTurns % nudgeInterval;
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -1168,6 +1187,9 @@ export class AgentSession {
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
 		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
+		if (event.type === "tool_execution_end" && !event.isError && event.toolName === "memory") {
+			this._memoryUsedInCurrentRun = true;
+		}
 		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
 		if (this._nestedToolCalls) {
 			if (event.type === "message_start" && event.message.role === "toolResult") {
@@ -1478,6 +1500,8 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._disposed = true;
+		this._cancelBackgroundMemoryReview();
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1958,6 +1982,9 @@ export class AgentSession {
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+		// Foreground priority: preempt any background memory review before starting a live turn.
+		this._cancelBackgroundMemoryReview();
+		this._memoryUsedInCurrentRun = false;
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -1995,12 +2022,14 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
-			if (this._agentRunAbortRequested) this._finishCancelledRetry();
+			const runAborted = this._agentRunAbortRequested;
+			if (runAborted) this._finishCancelledRetry();
 			this._failedResponse = undefined;
 			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			await this._emitAgentSettled();
+			this._maybeSpawnBackgroundMemoryReview(trigger, runAborted);
 		}
 	}
 
@@ -2616,6 +2645,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._cancelBackgroundMemoryReview();
 		if (this._isAgentRunActive) {
 			this._agentRunAbortRequested = true;
 		}
@@ -4557,6 +4587,151 @@ export class AgentSession {
 		}
 
 		return text.trim() || undefined;
+	}
+
+	// =========================================================================
+	// Background & Manual Memory Review
+	// =========================================================================
+
+	private _cancelBackgroundMemoryReview(): void {
+		if (this._memoryReviewAbortController) {
+			this._memoryReviewAbortController.abort();
+			this._memoryReviewAbortController = undefined;
+		}
+	}
+
+	private _maybeSpawnBackgroundMemoryReview(trigger: BeforeAgentStartTrigger, runAborted: boolean): void {
+		if (this._disposed || runAborted || trigger.messageType === "custom") return;
+		const settings = this.settingsManager.getMemorySettings();
+		if (!settings.reviewEnabled || settings.nudgeInterval <= 0) return;
+		if (!this.model || !this.getActiveToolNames().includes("memory")) return;
+
+		const lastAssistant = this._findLastAssistantMessage();
+		if (!lastAssistant || lastAssistant.stopReason === "error" || lastAssistant.stopReason === "aborted") {
+			return;
+		}
+		if (!this.getLastAssistantText()) return;
+
+		if (this._memoryUsedInCurrentRun) {
+			this._turnsSinceMemoryReview = 0;
+			return;
+		}
+
+		this._turnsSinceMemoryReview += 1;
+		if (this._turnsSinceMemoryReview < settings.nudgeInterval) {
+			return;
+		}
+		this._turnsSinceMemoryReview = 0;
+
+		if (this._memoryReviewPromise) return;
+		void this._executeMemoryReview({ background: true }).catch(() => {});
+	}
+
+	/**
+	 * Run a Hermes-style memory review on the current conversation.
+	 * Uses warm-cache prefix replay in `auto` mode or a compact history digest in `digest` mode.
+	 */
+	async runMemoryReview(focus?: string): Promise<MemoryReviewResult> {
+		this._cancelBackgroundMemoryReview();
+		this._turnsSinceMemoryReview = 0;
+		return this._executeMemoryReview({ background: false, focus });
+	}
+
+	private async _executeMemoryReview(options: { background: boolean; focus?: string }): Promise<MemoryReviewResult> {
+		const emptyUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+		const selectedModel = this.model;
+		const memoryTool =
+			this._toolRegistry.get("memory") ?? this.agent.state.tools.find((tool) => tool.name === "memory");
+		if (!selectedModel || !memoryTool) {
+			return {
+				saved: false,
+				changes: [],
+				responseText: "",
+				aborted: false,
+				usage: emptyUsage,
+				error: !selectedModel ? "No model selected" : "Memory tool is not available",
+			};
+		}
+
+		const controller = new AbortController();
+		this._memoryReviewAbortController = controller;
+		const reviewSettings = this.settingsManager.getMemorySettings();
+		let runPromise: Promise<MemoryReviewResult> | undefined;
+
+		runPromise = (async (): Promise<MemoryReviewResult> => {
+			try {
+				const request = await this._getSummarizationRequestAuth(selectedModel, controller.signal);
+				if (controller.signal.aborted || this._disposed) {
+					return { saved: false, changes: [], responseText: "", aborted: true, usage: emptyUsage };
+				}
+
+				const snapshot = this.agent.state.messages.slice();
+				const transformed = this.agent.transformContext
+					? await this.agent.transformContext(snapshot, controller.signal)
+					: snapshot;
+				const llmMessages = convertToLlm(transformed);
+
+				const result = await runMemoryReview({
+					model: request.model,
+					messages: llmMessages,
+					memoryTool,
+					cwd: this._cwd,
+					agentDir: this.settingsManager.getAgentDir(),
+					reviewMode: reviewSettings.reviewMode,
+					streamFn: this.agent.streamFunction,
+					thinkingLevel: request.thinkingLevel,
+					apiKey: request.apiKey,
+					headers: request.headers,
+					env: request.env,
+					sessionId: this.sessionId,
+					focus: options.focus,
+					signal: controller.signal,
+				});
+
+				if (!this._disposed && !result.aborted) {
+					this._emit({
+						type: "memory_review_end",
+						saved: result.saved,
+						changes: result.changes,
+						background: options.background,
+						...(result.error ? { error: result.error } : {}),
+					});
+				}
+				return result;
+			} catch (error) {
+				if (controller.signal.aborted || this._disposed) {
+					return { saved: false, changes: [], responseText: "", aborted: true, usage: emptyUsage };
+				}
+				const message = error instanceof Error ? error.message : String(error);
+				if (!options.background) {
+					this._emit({
+						type: "memory_review_end",
+						saved: false,
+						changes: [],
+						background: false,
+						error: message,
+					});
+				}
+				return {
+					saved: false,
+					changes: [],
+					responseText: "",
+					aborted: false,
+					usage: emptyUsage,
+					error: message,
+				};
+			} finally {
+				if (this._memoryReviewAbortController === controller) {
+					this._memoryReviewAbortController = undefined;
+				}
+				if (this._memoryReviewPromise === runPromise) {
+					this._memoryReviewPromise = undefined;
+				}
+			}
+		})();
+
+		this._memoryReviewPromise = runPromise;
+		return runPromise;
 	}
 
 	// =========================================================================

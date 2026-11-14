@@ -745,6 +745,36 @@
         }
       }
     },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "reviewEnabled": {
+          "type": "boolean",
+          "description": "Enable periodic background memory review after completed user turns.",
+          "default": true
+        },
+        "nudgeInterval": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Completed user turns between automatic background memory reviews (0 disables periodic spawns).",
+          "default": 10
+        },
+        "reviewMode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "auto"
+            },
+            {
+              "type": "string",
+              "const": "digest"
+            }
+          ],
+          "description": "Context strategy for background memory review: \"auto\" (warm-cache prefix replay) or \"digest\" (compact summary + recent tail).",
+          "default": "auto"
+        }
+      }
+    },
     "autoUpdate": {
       "anyOf": [
         {

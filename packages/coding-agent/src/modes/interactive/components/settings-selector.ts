@@ -20,6 +20,8 @@ import {
 	type CacheWarmingMode,
 	type DefaultProjectTrust,
 	type FullscreenExitOutput,
+	type MemoryReviewMode,
+	type MemorySettings,
 	type MermaidRenderingMode,
 	type QuietStartup,
 	type SearchProviderId,
@@ -108,6 +110,7 @@ export interface SettingsConfig {
 	warnings: WarningSettings;
 	voice?: VoiceSettings;
 	search?: SearchSettings;
+	memory?: Required<MemorySettings>;
 	autoUpdate?: AutoUpdateMode;
 	syncUser?: string;
 }
@@ -156,6 +159,7 @@ export interface SettingsCallbacks {
 	onSearchExtrasChange?: (extras: { enabled?: boolean; searxngUrl?: string; googleCseId?: string }) => void;
 	onOpenProviders?: () => void;
 	onOpenSync?: () => void;
+	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -822,6 +826,23 @@ export class SettingsSelectorComponent extends Container {
 				values: ["open"],
 			},
 			{
+				id: "memory-review",
+				label: "Memory auto-review",
+				description: "Periodic background memory review (auto = warm-cache replay, digest = compact summary)",
+				currentValue:
+					config.memory?.reviewEnabled === false
+						? "off"
+						: (config.memory?.reviewMode ?? SETTINGS_DEFAULTS.memory.reviewMode),
+				values: ["auto", "digest", "off"],
+			},
+			{
+				id: "memory-nudge-interval",
+				label: "Memory review interval",
+				description: "Completed user turns between automatic background memory reviews",
+				currentValue: String(config.memory?.nudgeInterval ?? SETTINGS_DEFAULTS.memory.nudgeInterval),
+				values: ["5", "10", "20", "0"],
+			},
+			{
 				id: "cloud-sync",
 				label: "Cloud sync (/sync)",
 				description: "Sync settings, API keys, models, skills, and plugins by login & password",
@@ -1078,6 +1099,19 @@ export class SettingsSelectorComponent extends Container {
 					case "cloud-sync":
 						callbacks.onCancel();
 						callbacks.onOpenSync?.();
+						break;
+					case "memory-review":
+						if (newValue === "off") {
+							callbacks.onMemorySettingsChange?.({ reviewEnabled: false });
+						} else {
+							callbacks.onMemorySettingsChange?.({
+								reviewEnabled: true,
+								reviewMode: newValue as MemoryReviewMode,
+							});
+						}
+						break;
+					case "memory-nudge-interval":
+						callbacks.onMemorySettingsChange?.({ nudgeInterval: parseInt(newValue, 10) });
 						break;
 					case "auto-update":
 						callbacks.onAutoUpdateChange?.(newValue as AutoUpdateMode);

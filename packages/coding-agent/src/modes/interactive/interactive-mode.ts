@@ -127,7 +127,12 @@ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
-import { clearMemoryTarget, countMemoryChars, MEMORY_CHAR_LIMITS, readMemorySnapshot } from "../../core/memory-store.ts";
+import {
+	clearMemoryTarget,
+	countMemoryChars,
+	MEMORY_CHAR_LIMITS,
+	readMemorySnapshot,
+} from "../../core/memory-store.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
@@ -3962,6 +3967,15 @@ export class InteractiveMode {
 				await this.checkShutdownRequested();
 				break;
 
+			case "memory_review_end":
+				if (event.saved) {
+					this.triggerAutoSyncPush();
+					if (event.background) {
+						this.showStatus("Memory review saved updates");
+					}
+				}
+				break;
+
 			case "compaction_start": {
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -5329,6 +5343,7 @@ export class InteractiveMode {
 					warnings: this.settingsManager.getWarnings(),
 					voice: this.settingsManager.getVoiceSettings(),
 					search: this.settingsManager.getSearchSettings(),
+					memory: this.settingsManager.getMemorySettings(),
 					autoUpdate: this.settingsManager.getAutoUpdate(),
 					syncUser: readSyncState()?.user,
 				},
@@ -5531,6 +5546,10 @@ export class InteractiveMode {
 					onOpenSync: () => {
 						this.showSyncManager();
 					},
+					onMemorySettingsChange: (patch) => {
+						this.settingsManager.setMemorySettings(patch);
+						this.triggerAutoSyncPush();
+					},
 					onAutoUpdateChange: (mode) => {
 						this.settingsManager.setAutoUpdate(mode);
 						this.triggerAutoSyncPush();
@@ -5572,6 +5591,26 @@ export class InteractiveMode {
 	private async handleMemoryCommand(arg?: string): Promise<void> {
 		const cwd = this.sessionManager.getCwd();
 		const agentDir = this.settingsManager.getAgentDir();
+		if (arg === "review" || arg?.startsWith("review ")) {
+			const focus = arg.slice("review".length).trim() || undefined;
+			this.showStatus("Memory review: running...");
+			const res = await this.session.runMemoryReview(focus);
+			if (res.aborted) {
+				this.showStatus("Memory review cancelled");
+				return;
+			}
+			if (res.error) {
+				this.showError(`Memory review failed: ${res.error}`);
+				return;
+			}
+			if (!res.saved) {
+				this.showStatus("Memory review: nothing to save");
+				return;
+			}
+			this.triggerAutoSyncPush();
+			this.showStatus(`Memory review saved:\n${res.changes.join("\n")}`);
+			return;
+		}
 		if (arg && arg.startsWith("clear ")) {
 			const target = arg.slice("clear ".length).trim();
 			if (target === "project" || target === "memory" || target === "user") {
@@ -5580,11 +5619,11 @@ export class InteractiveMode {
 				this.showStatus(`Memory [${res.target}] cleared (${res.clearedCount} entries removed)`);
 				return;
 			}
-			this.showError("Usage: /memory [clear project|memory|user]");
+			this.showError("Usage: /memory [review [focus] | clear project|memory|user]");
 			return;
 		}
 		if (arg) {
-			this.showError("Usage: /memory [clear project|memory|user]");
+			this.showError("Usage: /memory [review [focus] | clear project|memory|user]");
 			return;
 		}
 
@@ -5632,9 +5671,7 @@ export class InteractiveMode {
 			this.showStatus("Cloud sync: pushing...");
 			try {
 				const res = await syncPush();
-				this.showStatus(
-					`Cloud sync: pushed (${res.skillFiles} skills, ${res.extensionFiles} plugin/theme files)`,
-				);
+				this.showStatus(`Cloud sync: pushed (${res.skillFiles} skills, ${res.extensionFiles} plugin/theme files)`);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}

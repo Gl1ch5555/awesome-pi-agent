@@ -16,6 +16,8 @@ import type {
 	CompactionModelOverride,
 	DefaultProjectTrust,
 	FullscreenExitOutput,
+	MemoryReviewMode,
+	MemorySettings,
 	MermaidRenderingMode,
 	PackageSource,
 	QuietStartup,
@@ -42,6 +44,8 @@ export type {
 	FullscreenExitOutput,
 	ImageSettings,
 	MarkdownSettings,
+	MemoryReviewMode,
+	MemorySettings,
 	MermaidRenderingMode,
 	PackageSource,
 	ProviderRetrySettings,
@@ -1585,6 +1589,36 @@ export class SettingsManager {
 		if (extras.googleCseId !== undefined) {
 			this.globalSettings.search.googleCseId = extras.googleCseId.trim() || undefined;
 			this.markModified("search", "googleCseId");
+		}
+		this.save();
+	}
+
+	getMemorySettings(): Required<MemorySettings> {
+		const rawInterval = this.settings.memory?.nudgeInterval;
+		const nudgeInterval =
+			typeof rawInterval === "number" && Number.isFinite(rawInterval) && rawInterval >= 0
+				? Math.floor(rawInterval)
+				: SETTINGS_DEFAULTS.memory.nudgeInterval;
+		return {
+			reviewEnabled: this.settings.memory?.reviewEnabled ?? SETTINGS_DEFAULTS.memory.reviewEnabled,
+			nudgeInterval,
+			reviewMode: this.settings.memory?.reviewMode ?? SETTINGS_DEFAULTS.memory.reviewMode,
+		};
+	}
+
+	setMemorySettings(patch: Partial<MemorySettings>): void {
+		this.globalSettings.memory ??= {};
+		if (patch.reviewEnabled !== undefined) {
+			this.globalSettings.memory.reviewEnabled = patch.reviewEnabled;
+			this.markModified("memory", "reviewEnabled");
+		}
+		if (patch.nudgeInterval !== undefined) {
+			this.globalSettings.memory.nudgeInterval = Math.max(0, Math.floor(patch.nudgeInterval));
+			this.markModified("memory", "nudgeInterval");
+		}
+		if (patch.reviewMode !== undefined) {
+			this.globalSettings.memory.reviewMode = patch.reviewMode;
+			this.markModified("memory", "reviewMode");
 		}
 		this.save();
 	}

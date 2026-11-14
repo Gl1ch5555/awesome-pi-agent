@@ -491,6 +491,7 @@ describe("awesome-pi-agent customizations", () => {
 		const { session: s1 } = await createTestSession();
 		const promptBefore = s1.systemPrompt;
 		expect(promptBefore).toContain("Initial rule: use pnpm");
+		expect(promptBefore).not.toContain("<self_reflection>");
 
 		const prep = s1 as unknown as {
 			_baseSystemPromptOptions: unknown;
@@ -548,5 +549,186 @@ describe("awesome-pi-agent customizations", () => {
 		const plain = lines[1]!.replace(/\x1b\[[0-9;]*m/g, "");
 		expect(plain).toContain("gemini-4-hydrogen • high");
 		expect(plain).not.toContain("(google)");
+	});
+
+	it("runs Hermes-style background memory review every N turns with cache-parity prefix and memory-only whitelist", async () => {
+		const { createAssistantMessageEventStream, fauxAssistantMessage, fauxToolCall, getCurrentTools } = await import(
+			"@earendil-works/pi-ai"
+		);
+		const { Agent } = await import("@earendil-works/pi-agent-core");
+		const { AgentSession } = await import("../src/core/agent-session.js");
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const { SessionManager } = await import("../src/core/session-manager.js");
+		const { SettingsManager } = await import("../src/core/settings-manager.js");
+		const { readMemorySnapshot } = await import("../src/core/memory-store.js");
+		const { buildDigestMessages } = await import("../src/core/memory-review.js");
+
+		const projDir = join(tempDir, "review-proj");
+		const agentDir = join(tempDir, "review-agent");
+		mkdirSync(join(projDir, ".git"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+
+		const model = {
+			id: "faux-review-1",
+			name: "faux-review-1",
+			api: "openai-completions",
+			provider: "faux-mem-review",
+			baseUrl: "https://example.invalid/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+		} as any;
+
+		{
+			const settingsManager = SettingsManager.create(projDir, agentDir);
+			settingsManager.setMemorySettings({ reviewEnabled: true, nudgeInterval: 2, reviewMode: "auto" });
+
+			const resourceLoader = new DefaultResourceLoader({
+				cwd: projDir,
+				agentDir,
+				settingsManager,
+				noExtensions: true,
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			});
+			await resourceLoader.reload();
+
+			const seenContexts: Array<{
+				systemText: string;
+				toolNames: string[];
+				messageRoles: string[];
+				lastUser: string;
+			}> = [];
+			let reviewRound = 0;
+
+			const streamFn = (model: any, context: any) => {
+				const sysMsg = context.messages.find((m: any) => m.role === "system");
+				const lastUserMsg = [...context.messages].reverse().find((m: any) => m.role === "user");
+				const lastUserText =
+					typeof lastUserMsg?.content === "string"
+						? lastUserMsg.content
+						: (lastUserMsg?.content ?? []).map((b: any) => b.text ?? "").join("\n");
+				seenContexts.push({
+					systemText: typeof sysMsg?.content === "string" ? sysMsg.content : "",
+					toolNames: getCurrentTools(context.messages).map((t: any) => t.name),
+					messageRoles: context.messages.map((m: any) => m.role),
+					lastUser: lastUserText,
+				});
+
+				const stream = createAssistantMessageEventStream();
+				queueMicrotask(() => {
+					let response;
+					if (lastUserText.includes("Review the conversation above")) {
+						reviewRound += 1;
+						if (reviewRound === 1) {
+							// Attempt a forbidden tool alongside memory to verify dispatch-side whitelist
+							response = fauxAssistantMessage([
+								fauxToolCall("bash", { command: "rm -rf /" }),
+								fauxToolCall("memory", {
+									target: "user",
+									operations: [{ action: "add", content: "User prefers concise Russian responses" }],
+								}),
+							]);
+						} else {
+							response = fauxAssistantMessage("Saved user preference.");
+						}
+					} else {
+						response = fauxAssistantMessage("Foreground reply.");
+					}
+					stream.push({
+						type: "done",
+						reason: "stop",
+						message: { ...response, model: model.id, provider: model.provider },
+					});
+				});
+				return stream;
+			};
+
+			const sessionManager = SessionManager.inMemory(projDir);
+			const agent = new Agent({
+				initialState: {
+					systemPrompt: "",
+					model,
+					thinkingLevel: "off",
+					tools: [],
+					messages: [],
+				},
+				streamFn,
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager,
+				settingsManager,
+				cwd: projDir,
+				resourceLoader,
+				modelRuntime: {
+					getModel: () => model,
+					getPhysicalModel: () => model,
+					getAvailableSnapshot: () => [model],
+					hasConfiguredAuth: () => true,
+					checkAuth: async () => ({}),
+					getAuth: async () => ({ auth: { apiKey: "faux-key" }, env: {} }),
+					isUsingOAuth: () => false,
+				} as any,
+			});
+
+			const reviewEvents: Array<{ saved: boolean; background: boolean; changes: string[] }> = [];
+			session.subscribe((ev) => {
+				if (ev.type === "memory_review_end") {
+					reviewEvents.push({ saved: ev.saved, background: ev.background, changes: ev.changes });
+				}
+			});
+
+			// Turn 1: nudgeInterval is 2 -> no review yet
+			await session.prompt("Always reply in Russian concisely");
+			await new Promise((r) => setTimeout(r, 30));
+			expect(reviewEvents).toHaveLength(0);
+
+			// Turn 2: triggers background review asynchronously after turn completes
+			await session.prompt("Ok thanks");
+			await vi.waitFor(() => expect(reviewEvents).toHaveLength(1), { timeout: 2000 });
+			expect(reviewEvents[0]!.saved).toBe(true);
+			expect(reviewEvents[0]!.background).toBe(true);
+
+			// Verify cache-parity prefix: review request #1 kept identical tools[] & system prompt
+			const fgCtx = seenContexts[1]!;
+			const bgCtx = seenContexts[2]!;
+			expect(bgCtx.systemText).toBe(fgCtx.systemText);
+			expect(bgCtx.toolNames).toEqual(fgCtx.toolNames);
+			expect(bgCtx.toolNames).toContain("bash");
+
+			// Verify bash was denied on dispatch, while memory saved the preference
+			const snap = readMemorySnapshot({ cwd: projDir, agentDir });
+			expect(snap.user).toEqual(["User prefers concise Russian responses"]);
+
+			// Verify digest mode collapses older history without breaking toolCall/toolResult pairs
+			const digest = buildDigestMessages(
+				[
+					{ role: "system", content: "sys", timestamp: 0 },
+					{ role: "user", content: "old question", timestamp: 1 },
+					fauxAssistantMessage([fauxToolCall("read", { path: "a.ts" })]),
+					{
+						role: "toolResult",
+						toolCallId: "tc1",
+						toolName: "read",
+						content: [{ type: "text", text: "file content" }],
+						isError: false,
+						timestamp: 2,
+					},
+					{ role: "user", content: "recent question", timestamp: 3 },
+					fauxAssistantMessage("recent answer"),
+				],
+				2,
+			);
+			expect(digest[0]!.role).toBe("user");
+			expect((digest[0]!.content[0] as { text: string }).text).toContain("Earlier conversation digest");
+			expect((digest[0]!.content[0] as { text: string }).text).toContain("ASSISTANT[tools: read]");
+			expect(digest.slice(1).map((m) => m.role)).toEqual(["user", "assistant"]);
+
+			session.dispose();
+		}
 	});
 });

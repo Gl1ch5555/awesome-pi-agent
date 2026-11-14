@@ -207,6 +207,34 @@ const SearchSettingsSchema = Type.Object({
 	googleCseId: Type.Optional(Type.String({ description: "Google Custom Search Engine ID (cx)." })),
 });
 
+const MemoryReviewModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("digest")], {
+	description:
+		'Context strategy for background memory review: "auto" replays the session prefix (warm prompt cache), "digest" collapses older turns into a compact summary.',
+});
+
+const MemorySettingsSchema = Type.Object({
+	reviewEnabled: Type.Optional(
+		Type.Boolean({
+			description: "Enable periodic background memory review after completed user turns.",
+			default: SETTINGS_DEFAULTS.memory.reviewEnabled,
+		}),
+	),
+	nudgeInterval: Type.Optional(
+		Type.Number({
+			minimum: 0,
+			description: "Completed user turns between automatic background memory reviews (0 disables periodic spawns).",
+			default: SETTINGS_DEFAULTS.memory.nudgeInterval,
+		}),
+	),
+	reviewMode: Type.Optional(
+		Type.Union([Type.Literal("auto"), Type.Literal("digest")], {
+			description:
+				'Context strategy for background memory review: "auto" (warm-cache prefix replay) or "digest" (compact summary + recent tail).',
+			default: SETTINGS_DEFAULTS.memory.reviewMode,
+		}),
+	),
+});
+
 const WarningSettingsSchema = Type.Object({
 	anthropicExtraUsage: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.warnings.anthropicExtraUsage })),
 });
@@ -465,6 +493,7 @@ export const SettingsSchema = Type.Object(
 		warnings: Type.Optional(WarningSettingsSchema),
 		voice: Type.Optional(VoiceSettingsSchema),
 		search: Type.Optional(SearchSettingsSchema),
+		memory: Type.Optional(MemorySettingsSchema),
 		autoUpdate: Type.Optional(
 			Type.Union([Type.Literal("auto"), Type.Literal("notify"), Type.Literal("off")], {
 				description: "GitHub auto-update mode (auto, notify, off).",
@@ -557,6 +586,8 @@ export type VoiceModel = NonNullable<Static<typeof VoiceSettingsSchema>["model"]
 export interface VoiceSettings extends Static<typeof VoiceSettingsSchema> {}
 export type SearchProviderId = Static<typeof SearchProviderSchema>;
 export interface SearchSettings extends Static<typeof SearchSettingsSchema> {}
+export type MemoryReviewMode = Static<typeof MemoryReviewModeSchema>;
+export interface MemorySettings extends Static<typeof MemorySettingsSchema> {}
 export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}

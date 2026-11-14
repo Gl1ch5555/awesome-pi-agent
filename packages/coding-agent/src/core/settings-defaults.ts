@@ -75,6 +75,11 @@ export const SETTINGS_DEFAULTS = {
 		enabled: true,
 		provider: "tavily",
 	},
+	memory: {
+		reviewEnabled: true,
+		nudgeInterval: 10,
+		reviewMode: "auto",
+	},
 	autoUpdate: "auto",
 	onboardingCompleted: false,
 } as const;

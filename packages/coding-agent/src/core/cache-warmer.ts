@@ -20,6 +20,18 @@ import type { CacheWarmingMode } from "./settings-manager.ts";
 
 export type { CacheWarmingAction, CacheWarmingDecision };
 
+const suppressedCacheWarmingOptions = new WeakSet<object>();
+
+/** Mark a request options object so sdk.ts's streamFn does not restart CacheWarmer for auxiliary forks. */
+export function markSkipCacheWarmer<T extends object>(options: T): T {
+	suppressedCacheWarmingOptions.add(options);
+	return options;
+}
+
+export function isCacheWarmingSuppressed(options: unknown): boolean {
+	return typeof options === "object" && options !== null && suppressedCacheWarmingOptions.has(options);
+}
+
 /** Prompt size of the most recent real request on the branch, as reported by the provider. */
 function lastPromptTokens(entries: SessionEntry[]): number {
 	for (let index = entries.length - 1; index >= 0; index--) {

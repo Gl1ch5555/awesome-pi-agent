@@ -6,7 +6,7 @@ import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession, markRuntimeStreamFunction } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
-import { CacheWarmer } from "./cache-warmer.ts";
+import { CacheWarmer, isCacheWarmingSuppressed } from "./cache-warmer.ts";
 import { getClientIdentity } from "./client-identity.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
@@ -416,7 +416,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// the current transcript still extends the request's prefix. Agent state may
 			// shallow-copy the messages array or refresh the model object without changing
 			// the provider request, so top-level object identity is not a valid cache key.
-			if (options?.sessionId === sessionManager.getSessionId()) {
+			if (options?.sessionId === sessionManager.getSessionId() && !isCacheWarmingSuppressed(options)) {
 				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);

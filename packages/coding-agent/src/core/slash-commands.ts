@@ -22,8 +22,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "voice", description: "Toggle or configure voice input (Groq Whisper)" },
 	{
 		name: "memory",
-		description: "Inspect or clear saved self-reflection & project memory",
-		argumentHint: "[clear project|memory|user]",
+		description: "Inspect, review, or clear saved project & global memory",
+		argumentHint: "[review [focus] | clear project|memory|user]",
 	},
 	{ name: "sync", description: "Cloud sync (login, push, pull settings, API keys, models, skills)" },
 	{ name: "update", description: "Check and install updates from GitHub" },
