@@ -16,7 +16,8 @@ if (-not $Token) {
 
 $RepoOwner = "Gl1ch5555"
 $RepoName = "awesome-pi-agent"
-$InstallRoot = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".awesome-pi-agent" }
+$CmdName = "pi-awesome"
+$InstallRoot = if ($env:PI_INSTALL_DIR) { $env:PI_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".pi-awesome" }
 $SrcDir = Join-Path $InstallRoot "src"
 $BinDir = if ($env:PI_BIN_DIR) { $env:PI_BIN_DIR } else { Join-Path $env:USERPROFILE ".local\bin" }
 
@@ -76,34 +77,60 @@ if ($major -lt 22 -or ($major -eq 22 -and $minor -lt 19)) {
     throw "Node.js >= 22.19.0 is required (found v$nodeRaw)."
 }
 Write-Ok "node v$nodeRaw"
+Write-Info "install dir: $InstallRoot"
+Write-Info "command:     $CmdName"
 
 Write-Step "2/4" "Fetching $RepoOwner/$RepoName"
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
-$AuthUrl = if ($Token) {
-    "https://x-access-token:${Token}@github.com/${RepoOwner}/${RepoName}.git"
-} else {
-    "https://github.com/${RepoOwner}/${RepoName}.git"
-}
-$CleanUrl = "https://github.com/${RepoOwner}/${RepoName}.git"
+$TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pi-awesome-" + [System.Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 
-if (Test-Path (Join-Path $SrcDir ".git")) {
-    Write-Info "Updating existing checkout in $SrcDir"
-    git -C $SrcDir remote set-url origin $AuthUrl
-    git -C $SrcDir fetch --depth 1 origin main
-    git -C $SrcDir reset --hard origin/main
-    git -C $SrcDir remote set-url origin $CleanUrl
-} else {
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ZipPath = Join-Path $TempDir "repo.zip"
+    $ExtractDir = Join-Path $TempDir "extract"
+    $Headers = @{ "User-Agent" = "awesome-pi-agent-installer" }
+    if ($Token) {
+        $Headers["Authorization"] = "token $Token"
+        $ZipUrl = "https://api.github.com/repos/${RepoOwner}/${RepoName}/zipball/main"
+    } else {
+        $ZipUrl = "https://github.com/${RepoOwner}/${RepoName}/archive/refs/heads/main.zip"
+    }
+
+    $Downloaded = $false
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            Write-Info "Downloading archive (attempt $attempt/4)..."
+            Invoke-WebRequest -Uri $ZipUrl -Headers $Headers -OutFile $ZipPath -UseBasicParsing
+            $Downloaded = $true
+            break
+        } catch {
+            if ($attempt -eq 4) { throw }
+            Start-Sleep -Seconds 2
+        }
+    }
+
+    if (-not $Downloaded) {
+        throw "Failed to download source archive."
+    }
+
+    Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
+    $InnerDir = Get-ChildItem -Path $ExtractDir -Directory | Select-Object -First 1
+    if (-not $InnerDir) {
+        throw "Extracted archive is empty."
+    }
+
     if (Test-Path $SrcDir) { Remove-Item -Recurse -Force $SrcDir }
-    Write-Info "Cloning repository into $SrcDir"
-    git clone --depth 1 $AuthUrl $SrcDir
-    git -C $SrcDir remote set-url origin $CleanUrl
+    Move-Item -Path $InnerDir.FullName -Destination $SrcDir
+    Write-Ok "Source extracted to $SrcDir"
+} finally {
+    if (Test-Path $TempDir) { Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue }
 }
-Write-Ok "Source ready"
 
-Write-Step "3/4" "Installing dependencies & building pi"
+Write-Step "3/4" "Installing dependencies & building $CmdName"
 
 Push-Location $SrcDir
 try {
@@ -111,7 +138,10 @@ try {
     npm install --ignore-scripts --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
 
-    Write-Info "Building workspace packages"
+    Write-Info "Hydrating model data & building packages"
+    npm run hydrate:model-data
+    if ($LASTEXITCODE -ne 0) { throw "npm run hydrate:model-data failed" }
+
     npm run build:offline
     if ($LASTEXITCODE -ne 0) { throw "npm run build:offline failed" }
 } finally {
@@ -119,15 +149,15 @@ try {
 }
 Write-Ok "Build complete"
 
-Write-Step "4/4" "Installing pi command"
+Write-Step "4/4" "Installing $CmdName command"
 
 $CliEntry = Join-Path $SrcDir "packages\coding-agent\dist\bundle\cli.js"
 if (-not (Test-Path $CliEntry)) {
     throw "Build artifact missing: $CliEntry"
 }
 
-$CmdShim = Join-Path $BinDir "pi.cmd"
-$PsShim = Join-Path $BinDir "pi.ps1"
+$CmdShim = Join-Path $BinDir "$CmdName.cmd"
+$PsShim = Join-Path $BinDir "$CmdName.ps1"
 
 @"
 @echo off
@@ -153,5 +183,5 @@ if ($pathEntries -notcontains $BinDir) {
 
 Write-Host ""
 Write-Host "  Done. " -ForegroundColor Green -NoNewline
-Write-Host "Open a new terminal (or run directly) and execute: pi" -ForegroundColor White
+Write-Host "Open a new terminal (or run directly) and execute: $CmdName" -ForegroundColor White
 Write-Host ""

@@ -8,7 +8,8 @@ set -euo pipefail
 
 REPO_OWNER="Gl1ch5555"
 REPO_NAME="awesome-pi-agent"
-INSTALL_ROOT="${PI_INSTALL_DIR:-$HOME/.awesome-pi-agent}"
+CMD_NAME="pi-awesome"
+INSTALL_ROOT="${PI_INSTALL_DIR:-$HOME/.pi-awesome}"
 SRC_DIR="$INSTALL_ROOT/src"
 BIN_DIR="${PI_BIN_DIR:-$HOME/.local/bin}"
 TOKEN="${PI_GH_TOKEN:-${GITHUB_TOKEN:-${1:-}}}"
@@ -49,8 +50,8 @@ printf "${C_DIM}  ------------------------------------------------${C_RESET}\n"
 
 step "1/4" "Checking runtime requirements"
 
-command -v git >/dev/null 2>&1 || fail "git is not installed. Please install git first."
-ok "git $(git --version | awk '{print $3}')"
+command -v curl >/dev/null 2>&1 || fail "curl is required."
+command -v tar >/dev/null 2>&1 || fail "tar is required."
 
 if ! command -v node >/dev/null 2>&1; then
   fail "Node.js >= 22.19 is required. Install Node.js 22+ and re-run."
@@ -63,47 +64,73 @@ if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt
   fail "Node.js >= 22.19.0 is required (found v${NODE_VER})."
 fi
 ok "node v${NODE_VER}"
+info "install dir: $INSTALL_ROOT"
+info "command:     $CMD_NAME"
 
 step "2/4" "Fetching ${REPO_OWNER}/${REPO_NAME}"
 
 mkdir -p "$INSTALL_ROOT" "$BIN_DIR"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+TARBALL_FILE="$TMP_DIR/repo.tar.gz"
+DOWNLOADED=0
+
 if [ -n "$TOKEN" ]; then
-  AUTH_URL="https://x-access-token:${TOKEN}@github.com/${REPO_OWNER}/${REPO_NAME}.git"
+  TAR_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/tarball/main"
+  info "Downloading archive via GitHub token (HTTP/1.1 + retries)..."
+  if curl -fSL --http1.1 --retry 5 --retry-delay 2 --connect-timeout 20 \
+    -H "Authorization: token ${TOKEN}" \
+    -H "Accept: application/vnd.github+json" \
+    "$TAR_URL" -o "$TARBALL_FILE"; then
+    DOWNLOADED=1
+  fi
 else
-  AUTH_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+  TAR_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/main.tar.gz"
+  info "Downloading source archive (HTTP/1.1 + retries)..."
+  if curl -fSL --http1.1 --retry 5 --retry-delay 2 --connect-timeout 20 \
+    "$TAR_URL" -o "$TARBALL_FILE"; then
+    DOWNLOADED=1
+  fi
 fi
-CLEAN_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
 
-if [ -d "$SRC_DIR/.git" ]; then
-  info "Updating existing checkout in $SRC_DIR"
-  git -C "$SRC_DIR" remote set-url origin "$AUTH_URL"
-  git -C "$SRC_DIR" fetch --depth 1 origin main
-  git -C "$SRC_DIR" reset --hard origin/main
-  git -C "$SRC_DIR" remote set-url origin "$CLEAN_URL"
-else
+if [ "$DOWNLOADED" -eq 1 ]; then
   rm -rf "$SRC_DIR"
-  info "Cloning repository into $SRC_DIR"
-  git clone --depth 1 "$AUTH_URL" "$SRC_DIR"
-  git -C "$SRC_DIR" remote set-url origin "$CLEAN_URL"
+  mkdir -p "$SRC_DIR"
+  tar -xzf "$TARBALL_FILE" --strip-components=1 -C "$SRC_DIR"
+  ok "Archive extracted to $SRC_DIR"
+elif command -v git >/dev/null 2>&1; then
+  warn "Archive download failed, falling back to git clone (HTTP/1.1)..."
+  if [ -n "$TOKEN" ]; then
+    CLONE_URL="https://x-access-token:${TOKEN}@github.com/${REPO_OWNER}/${REPO_NAME}.git"
+  else
+    CLONE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+  fi
+  rm -rf "$SRC_DIR"
+  git -c http.version=HTTP/1.1 -c http.postBuffer=524288000 clone --depth 1 "$CLONE_URL" "$SRC_DIR"
+  git -C "$SRC_DIR" remote set-url origin "https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+  ok "Repository cloned to $SRC_DIR"
+else
+  fail "Failed to download ${REPO_OWNER}/${REPO_NAME} archive and git is not installed."
 fi
-ok "Source ready"
 
-step "3/4" "Installing dependencies & building pi"
+step "3/4" "Installing dependencies & building ${CMD_NAME}"
 
 cd "$SRC_DIR"
 info "npm install --ignore-scripts"
 npm install --ignore-scripts --no-audit --no-fund
-info "Building workspace packages"
+info "Hydrating model data & building packages"
+npm run hydrate:model-data
 npm run build:offline
 ok "Build complete"
 
-step "4/4" "Installing pi binary"
+step "4/4" "Installing ${CMD_NAME} command"
 
 CLI_ENTRY="$SRC_DIR/packages/coding-agent/dist/bundle/cli.js"
 [ -f "$CLI_ENTRY" ] || fail "Build artifact missing: $CLI_ENTRY"
 chmod +x "$CLI_ENTRY"
 
-TARGET_BIN="$BIN_DIR/pi"
+TARGET_BIN="$BIN_DIR/$CMD_NAME"
 cat > "$TARGET_BIN" <<EOF
 #!/usr/bin/env bash
 exec node "$CLI_ENTRY" "\$@"
@@ -112,11 +139,11 @@ chmod +x "$TARGET_BIN"
 ok "Installed $TARGET_BIN"
 
 if [ -w /usr/local/bin ] && [ "$BIN_DIR" != "/usr/local/bin" ]; then
-  ln -sf "$TARGET_BIN" /usr/local/bin/pi
-  ok "Linked /usr/local/bin/pi"
+  ln -sf "$TARGET_BIN" "/usr/local/bin/$CMD_NAME"
+  ok "Linked /usr/local/bin/$CMD_NAME"
 fi
 
-if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
+if ! echo ":$PATH:" | grep -q ":$BIN_DIR:" && [ ! -w /usr/local/bin ]; then
   warn "$BIN_DIR is not in your PATH. Add this to ~/.bashrc or ~/.zshrc:"
   printf "     ${C_ACCENT}export PATH=\"%s:\$PATH\"${C_RESET}\n" "$BIN_DIR"
 fi
@@ -127,4 +154,4 @@ if [ "$(uname -s)" = "Linux" ]; then
   fi
 fi
 
-printf "\n${C_OK}${C_BOLD}  Done.${C_RESET} ${C_TEXT}Run '${C_BOLD}pi${C_RESET}${C_TEXT}' to launch.${C_RESET}\n\n"
+printf "\n${C_OK}${C_BOLD}  Done.${C_RESET} ${C_TEXT}Run '${C_BOLD}${CMD_NAME}${C_RESET}${C_TEXT}' to launch.${C_RESET}\n\n"

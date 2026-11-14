@@ -31,7 +31,10 @@ curl -fsSL -H "Authorization: token $PI_GH_TOKEN" \
   https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.sh | bash
 ```
 
-Повторный запуск этой же команды обновляет `pi` до последнего коммита.
+Повторный запуск этой же команды обновляет `pi-awesome` до последнего коммита.
+
+Папка установки: `~/.pi-awesome` (Linux/macOS) и `%USERPROFILE%\.pi-awesome` (Windows).
+Команда запуска: `pi-awesome`.
 
 ### Windows (PowerShell)
 
