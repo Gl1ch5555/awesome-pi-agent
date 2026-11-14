@@ -258,6 +258,31 @@ describe("awesome-pi-agent customizations", () => {
 		expect(gpt5.thinkingLevelMap?.off).toBeUndefined();
 	});
 
+	it("upgrades legacy models.json gemini-4 entries so thinking levels are available without re-saving", async () => {
+		const { ModelConfig } = await import("../src/core/model-config.js");
+		const { composeModelProvider } = await import("../src/core/provider-composer.js");
+		const { getSupportedThinkingLevels } = await import("@earendil-works/pi-ai");
+		const modelsPath = join(tempDir, "legacy-models.json");
+		writeFileSync(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					carbon: {
+						baseUrl: "http://35.255.116.33:8000/v1",
+						apiKey: "sk-test",
+						api: "openai-completions",
+						models: [{ id: "gemini-4-hydrogen", reasoning: false, contextWindow: 1048576, maxTokens: 65536 }],
+					},
+				},
+			}),
+		);
+		const config = await ModelConfig.load(modelsPath);
+		const provider = composeModelProvider("carbon", undefined, config, undefined);
+		const model = provider.getModels()[0]!;
+		expect(model.reasoning).toBe(true);
+		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high"]);
+	});
+
 	it("tails live lines while streaming write tool calls and shows line numbers", async () => {
 		const { writeRenderers } = await import("../src/core/tools/renderers/write.js");
 		const { ToolExecutionComponent } = await import("../src/modes/interactive/components/tool-execution.js");
@@ -318,6 +343,34 @@ describe("awesome-pi-agent customizations", () => {
 			expect(editor.getText()).toBe("");
 			vi.advanceTimersByTime(950);
 			expect(stopped).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retries Groq Whisper transcription on 429 when retryOnRateLimit is enabled", async () => {
+		const { transcribeAudioWithGroq } = await import("../src/core/voice/groq-whisper.js");
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify({ error: { message: "Rate limit reached. Please try again in 0.01s." } }), {
+					status: 429,
+					headers: { "Retry-After": "1" },
+				}),
+			)
+			.mockResolvedValueOnce(new Response(JSON.stringify({ text: "hello world" }), { status: 200 }));
+
+		vi.useFakeTimers();
+		try {
+			const promise = transcribeAudioWithGroq({
+				wavBuffer: Buffer.from("RIFF"),
+				apiKey: "gsk_test",
+				retryOnRateLimit: true,
+			});
+			await vi.advanceTimersByTimeAsync(1500);
+			const text = await promise;
+			expect(text).toBe("hello world");
+			expect(fetchMock).toHaveBeenCalledTimes(2);
 		} finally {
 			vi.useRealTimers();
 		}

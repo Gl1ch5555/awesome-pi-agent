@@ -13,40 +13,84 @@ export interface GroqTranscribeOptions {
 	language?: string;
 	prompt?: string;
 	signal?: AbortSignal;
+	retryOnRateLimit?: boolean;
+}
+
+class GroqRateLimitError extends Error {
+	readonly retryAfterMs: number;
+	constructor(message: string, retryAfterMs: number) {
+		super(message);
+		this.retryAfterMs = retryAfterMs;
+	}
+}
+
+function parseGroqRetryAfterMs(res: Response, errText: string): number {
+	const header = res.headers.get("retry-after");
+	if (header) {
+		const sec = Number(header);
+		if (Number.isFinite(sec) && sec > 0) {
+			return Math.min(12_000, Math.max(1_000, Math.ceil(sec * 1000)));
+		}
+	}
+	const match = errText.match(/try again in\s+(\d+(?:\.\d+)?)\s*(ms|s|m)/i);
+	if (match) {
+		const num = Number(match[1]);
+		const unit = match[2]!.toLowerCase();
+		if (Number.isFinite(num) && num > 0) {
+			const ms = unit === "ms" ? num : unit === "m" ? num * 60_000 : num * 1000;
+			return Math.min(12_000, Math.max(1_000, Math.ceil(ms + 250)));
+		}
+	}
+	return 3_500;
 }
 
 export async function transcribeAudioWithGroq(options: GroqTranscribeOptions): Promise<string> {
-	const form = new FormData();
-	const blob = new Blob([new Uint8Array(options.wavBuffer)], { type: "audio/wav" });
-	form.append("file", blob, "voice.wav");
-	form.append("model", options.model ?? "whisper-large-v3");
-	form.append("response_format", "json");
-	if (options.language && options.language !== "auto") {
-		form.append("language", options.language);
-	}
-	if (options.prompt && options.prompt.trim().length > 0) {
-		form.append("prompt", options.prompt.trim().slice(-200));
-	}
+	const maxAttempts = options.retryOnRateLimit ? 3 : 1;
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const form = new FormData();
+		const blob = new Blob([new Uint8Array(options.wavBuffer)], { type: "audio/wav" });
+		form.append("file", blob, "voice.wav");
+		form.append("model", options.model ?? "whisper-large-v3");
+		form.append("response_format", "json");
+		if (options.language && options.language !== "auto") {
+			form.append("language", options.language);
+		}
+		if (options.prompt && options.prompt.trim().length > 0) {
+			form.append("prompt", options.prompt.trim().slice(-200));
+		}
 
-	const timeoutSignal = AbortSignal.timeout(25_000);
-	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+		const timeoutSignal = AbortSignal.timeout(25_000);
+		const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
-	const res = await fetch(GROQ_TRANSCRIPTION_URL, {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${options.apiKey}`,
-		},
-		body: form,
-		signal,
-	});
+		const res = await fetch(GROQ_TRANSCRIPTION_URL, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${options.apiKey}`,
+			},
+			body: form,
+			signal,
+		});
 
-	if (!res.ok) {
+		if (res.ok) {
+			const data = (await res.json()) as { text?: string };
+			return (data.text ?? "").trim();
+		}
+
 		const errText = await res.text().catch(() => "");
+		if (res.status === 429) {
+			const retryAfterMs = parseGroqRetryAfterMs(res, errText);
+			if (attempt < maxAttempts && !options.signal?.aborted) {
+				await new Promise((r) => setTimeout(r, retryAfterMs));
+				continue;
+			}
+			throw new GroqRateLimitError(
+				`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`,
+				retryAfterMs,
+			);
+		}
 		throw new Error(`Groq Whisper error (${res.status}): ${errText.slice(0, 240) || res.statusText}`);
 	}
-
-	const data = (await res.json()) as { text?: string };
-	return (data.text ?? "").trim();
+	return "";
 }
 
 export interface LiveVoiceSessionCallbacks {
@@ -77,6 +121,7 @@ export class LiveVoiceSession {
 	private partialText = "";
 	private lastPreviewBytes = 0;
 	private previewInFlight = false;
+	private previewRateLimitedUntil = 0;
 	private previewAbort: AbortController | undefined;
 	private previewTimer: ReturnType<typeof setInterval> | undefined;
 	private uiTimer: ReturnType<typeof setInterval> | undefined;
@@ -94,6 +139,7 @@ export class LiveVoiceSession {
 		this.partialText = "";
 		this.prefixCommittedText = "";
 		this.lastPreviewBytes = 0;
+		this.previewRateLimitedUntil = 0;
 
 		this.recorder.start({
 			onAudioData: (_chunk, _total, rms) => {
@@ -113,7 +159,7 @@ export class LiveVoiceSession {
 			this.emitState("recording");
 		}, 90);
 
-		const intervalMs = Math.max(700, this.options.chunkIntervalMs ?? 1500);
+		const intervalMs = Math.max(3000, this.options.chunkIntervalMs ?? 3500);
 		this.previewTimer = setInterval(() => {
 			void this.runPreviewChunk();
 		}, intervalMs);
@@ -132,10 +178,11 @@ export class LiveVoiceSession {
 
 	private async runPreviewChunk(): Promise<void> {
 		if (this.finished || this.previewInFlight) return;
+		if (Date.now() < this.previewRateLimitedUntil) return;
 		const pcm = this.recorder.getPcmBuffer();
-		// Wait until at least 0.5s of new audio has arrived since last preview
-		if (pcm.length < PCM_BYTES_PER_SECOND * 0.5) return;
-		if (pcm.length - this.lastPreviewBytes < PCM_BYTES_PER_SECOND * 0.45) return;
+		// Wait until at least 0.8s of audio has arrived and at least 1s since last preview
+		if (pcm.length < PCM_BYTES_PER_SECOND * 0.8) return;
+		if (pcm.length - this.lastPreviewBytes < PCM_BYTES_PER_SECOND * 1.0) return;
 
 		this.previewInFlight = true;
 		const controller = new AbortController();
@@ -153,14 +200,18 @@ export class LiveVoiceSession {
 				language: this.options.language,
 				prompt: this.prefixCommittedText,
 				signal: controller.signal,
+				retryOnRateLimit: false,
 			});
 			if (!this.finished && text) {
 				this.lastPreviewBytes = snapshotBytes;
 				this.partialText = text;
 				this.emitState("recording");
 			}
-		} catch {
-			// Preview chunk errors shouldn't break recording; final pass will run cleanly
+		} catch (err) {
+			// Pause live previews on 429 so we preserve RPM budget for the final transcription
+			if (err instanceof GroqRateLimitError) {
+				this.previewRateLimitedUntil = Date.now() + Math.max(10_000, err.retryAfterMs);
+			}
 		} finally {
 			if (this.previewAbort === controller) {
 				this.previewAbort = undefined;
@@ -202,6 +253,7 @@ export class LiveVoiceSession {
 				model: this.options.model,
 				language: this.options.language,
 				prompt: promptHint,
+				retryOnRateLimit: true,
 			});
 			if (text) {
 				segments.push(text);

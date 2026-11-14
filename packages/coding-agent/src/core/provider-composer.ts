@@ -229,14 +229,30 @@ function modelFromJson(
 	if (definition.maxTokens !== undefined && definition.maxTokens <= 0) {
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid maxTokens`);
 	}
+	const isGemini4 = /(?:^|\/)gemini-4/i.test(definition.id);
+	const isGemini3Pro = /(?:^|\/)gemini-3(?:\.\d+)?-pro/i.test(definition.id);
+	const isGemini3Flash = /(?:^|\/)gemini-3(?:\.\d+)?-flash/i.test(definition.id);
+	const legacyOffMap =
+		definition.thinkingLevelMap &&
+		(definition.thinkingLevelMap as Record<string, unknown>).off === "off" &&
+		(isGemini4 || isGemini3Pro || isGemini3Flash);
+	const upgradeGemini4Reasoning = isGemini4 && !definition.reasoning && !definition.thinkingLevelMap;
+	const resolvedReasoning = upgradeGemini4Reasoning ? true : (definition.reasoning ?? false);
+	const resolvedThinkingLevelMap =
+		upgradeGemini4Reasoning || legacyOffMap
+			? isGemini3Flash
+				? { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: null }
+				: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null }
+			: definition.thinkingLevelMap;
+
 	return {
 		id: definition.id,
 		name: definition.name ?? definition.id,
 		api: api as Api,
 		provider: providerId,
 		baseUrl,
-		reasoning: definition.reasoning ?? false,
-		thinkingLevelMap: definition.thinkingLevelMap,
+		reasoning: resolvedReasoning,
+		thinkingLevelMap: resolvedThinkingLevelMap,
 		input: (definition.input ?? ["text"]) as ("text" | "image")[],
 		inputLimits: definition.inputLimits,
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
