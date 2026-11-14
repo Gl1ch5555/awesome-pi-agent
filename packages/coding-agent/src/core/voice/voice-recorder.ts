@@ -129,12 +129,14 @@ function buildWindowsPowerShellRecorderScript(): string {
 		"    running = false;",
 		"    waveInStop(hwi);",
 		"    waveInReset(hwi);",
+		"    lock (gate) { try { stdout.Flush(); } catch {} }",
 		"    for (int i = 0; i < 4; i++) {",
 		"      waveInUnprepareHeader(hwi, hdrPtrs[i], hdrSize);",
 		"      Marshal.FreeHGlobal(hdrPtrs[i]);",
 		"      Marshal.FreeHGlobal(dataPtrs[i]);",
 		"    }",
 		"    waveInClose(hwi);",
+		"    GC.KeepAlive(cb);",
 		"  }",
 		"}",
 		"'@",
@@ -171,7 +173,26 @@ function findLinuxFfmpegInput(): { format: string; input: string } | undefined {
 	return undefined;
 }
 
+let cachedRecorderBackend: { platform: string; backend: RecorderBackend | undefined } | undefined;
+
+export function resetRecorderBackendCache(): void {
+	cachedRecorderBackend = undefined;
+}
+
+export function warmupRecorderBackend(): RecorderBackend | undefined {
+	if (cachedRecorderBackend && cachedRecorderBackend.platform === process.platform) {
+		return cachedRecorderBackend.backend;
+	}
+	const backend = detectRecorderBackendUncached();
+	cachedRecorderBackend = { platform: process.platform, backend };
+	return backend;
+}
+
 export function detectRecorderBackend(): RecorderBackend | undefined {
+	return warmupRecorderBackend();
+}
+
+function detectRecorderBackendUncached(): RecorderBackend | undefined {
 	const p = process.platform;
 	if (p === "linux") {
 		if (commandExists("parecord")) {
@@ -285,7 +306,7 @@ export function detectRecorderBackend(): RecorderBackend | undefined {
 			return {
 				name: "powershell-winmm",
 				command: psCmd,
-				args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+				args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
 			};
 		}
 		return undefined;
@@ -331,6 +352,7 @@ export function computePcmRmsLevel(chunk: Buffer): number {
 
 export class VoiceRecorder {
 	private proc: ChildProcess | undefined;
+	private backendName: string | undefined;
 	private chunks: Buffer[] = [];
 	private totalBytes = 0;
 	private stderrText = "";
@@ -353,9 +375,11 @@ export class VoiceRecorder {
 		this.totalBytes = 0;
 		this.stderrText = "";
 		this.stopped = false;
+		this.backendName = backend.name;
 
+		const useStdinPipe = backend.name === "powershell-winmm" || backend.name === "ffmpeg-dshow";
 		this.proc = spawn(backend.command, backend.args, {
-			stdio: [backend.name === "powershell-winmm" ? "pipe" : "ignore", "pipe", "pipe"],
+			stdio: [useStdinPipe ? "pipe" : "ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
 
@@ -403,7 +427,9 @@ export class VoiceRecorder {
 	async stop(): Promise<Buffer> {
 		this.stopped = true;
 		const proc = this.proc;
+		const backendName = this.backendName;
 		this.proc = undefined;
+		this.backendName = undefined;
 		if (proc && proc.exitCode === null) {
 			await new Promise<void>((resolve) => {
 				const timer = setTimeout(() => {
@@ -413,14 +439,21 @@ export class VoiceRecorder {
 						// ignore
 					}
 					resolve();
-				}, 600);
+				}, 700);
 				proc.once("close", () => {
 					clearTimeout(timer);
 					resolve();
 				});
 				try {
+					if (backendName === "ffmpeg-dshow") {
+						proc.stdin?.write("q\n");
+					}
 					proc.stdin?.end();
-					proc.kill("SIGTERM");
+					// On Windows, SIGTERM invokes TerminateProcess immediately before stdout flushes;
+					// let powershell-winmm / ffmpeg-dshow exit cleanly via stdin EOF / 'q' first.
+					if (process.platform !== "win32") {
+						proc.kill("SIGTERM");
+					}
 				} catch {
 					clearTimeout(timer);
 					resolve();

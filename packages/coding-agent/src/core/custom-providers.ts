@@ -106,18 +106,37 @@ export function inferModelMetadata(raw: Record<string, unknown>): DiscoveredProv
 									lower,
 								);
 
+	const isGemini4OrPro = /(?:gemini-4|gemini-3(?:\.\d+)?-pro)/i.test(lower);
+	const isGeminiFlash3Plus = /gemini-3(?:\.\d+)?-flash/i.test(lower);
 	const supportsExtended =
 		reasoning && /(gemini-4|gemini-3|gpt-5|gpt-6|opus-4-6|opus-5|sonnet-4-6|grok-4)/.test(lower);
-	const thinkingLevelMap: ThinkingLevelMap | undefined = supportsExtended
-		? {
-				off: "off",
-				minimal: "minimal",
-				low: "low",
-				medium: "medium",
-				high: "high",
-				xhigh: "xhigh",
-			}
-		: undefined;
+	const thinkingLevelMap: ThinkingLevelMap | undefined = !supportsExtended
+		? undefined
+		: isGemini4OrPro
+			? {
+					off: null,
+					minimal: null,
+					low: "low",
+					medium: "medium",
+					high: "high",
+					xhigh: null,
+				}
+			: isGeminiFlash3Plus
+				? {
+						off: null,
+						minimal: "minimal",
+						low: "low",
+						medium: "medium",
+						high: "high",
+						xhigh: null,
+					}
+				: {
+						minimal: "minimal",
+						low: "low",
+						medium: "medium",
+						high: "high",
+						xhigh: "xhigh",
+					};
 
 	const visionCapable =
 		Array.isArray(raw.input) && raw.input.includes("image")

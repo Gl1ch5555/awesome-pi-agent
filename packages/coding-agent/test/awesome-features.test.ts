@@ -154,7 +154,10 @@ describe("awesome-pi-agent customizations", () => {
 		mkdirSync(skillDir, { recursive: true });
 		mkdirSync(extDir, { recursive: true });
 		mkdirSync(themeDir, { recursive: true });
-		writeFileSync(join(srcAgentDir, "settings.json"), JSON.stringify({ theme: "graphite", packages: ["npm:my-pkg"] }));
+		writeFileSync(
+			join(srcAgentDir, "settings.json"),
+			JSON.stringify({ theme: "graphite", packages: ["npm:my-pkg"] }),
+		);
 		writeFileSync(join(srcAgentDir, "models.json"), JSON.stringify({ providers: { test: { baseUrl: "http://x" } } }));
 		writeFileSync(join(srcAgentDir, "auth.json"), JSON.stringify({ groq: { key: "gsk_test" } }));
 		writeFileSync(join(skillDir, "SKILL.md"), "# My Skill\nhello");
@@ -170,7 +173,9 @@ describe("awesome-pi-agent customizations", () => {
 		expect(applied.skillFiles).toBe(1);
 		expect(applied.extensionFiles).toBe(2);
 		expect(readFileSync(join(dstAgentDir, "skills", "my-skill", "SKILL.md"), "utf8")).toContain("My Skill");
-		expect(readFileSync(join(dstAgentDir, "extensions", "my-plugin", "index.ts"), "utf8")).toContain("export default");
+		expect(readFileSync(join(dstAgentDir, "extensions", "my-plugin", "index.ts"), "utf8")).toContain(
+			"export default",
+		);
 		expect(readFileSync(join(dstAgentDir, "themes", "custom.json"), "utf8")).toBe("{}");
 		expect(readFileSync(join(dstAgentDir, "auth.json"), "utf8")).toContain("gsk_test");
 
@@ -223,16 +228,99 @@ describe("awesome-pi-agent customizations", () => {
 	});
 
 	it("auto-detects context window and thinking levels for modern models", () => {
-		const gemini = inferModelMetadata({ id: "gemini-4-hydrogen" });
-		expect(gemini.reasoning).toBe(true);
-		expect(gemini.contextWindow).toBe(1048576);
-		expect(gemini.thinkingLevelMap?.xhigh).toBe("xhigh");
-		expect(gemini.input).toContain("image");
+		const gemini4 = inferModelMetadata({ id: "gemini-4-hydrogen" });
+		expect(gemini4.reasoning).toBe(true);
+		expect(gemini4.contextWindow).toBe(1048576);
+		expect(gemini4.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+		});
+		expect(gemini4.input).toContain("image");
+
+		const geminiFlash = inferModelMetadata({ id: "gemini-3-flash-preview" });
+		expect(geminiFlash.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: "minimal",
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+		});
 
 		const gpt5 = inferModelMetadata({ id: "gpt-5.4" });
 		expect(gpt5.reasoning).toBe(true);
 		expect(gpt5.contextWindow).toBe(400000);
 		expect(gpt5.thinkingLevelMap?.high).toBe("high");
+		expect(gpt5.thinkingLevelMap?.off).toBeUndefined();
+	});
+
+	it("tails live lines while streaming write tool calls and shows line numbers", async () => {
+		const { writeRenderers } = await import("../src/core/tools/renderers/write.js");
+		const { ToolExecutionComponent } = await import("../src/modes/interactive/components/tool-execution.js");
+		initTheme("graphite");
+		const tui = { requestRender: () => {} } as any;
+		const lines = Array.from({ length: 20 }, (_, i) => `const line${i + 1} = ${i + 1};`).join("\n");
+		const comp = new ToolExecutionComponent(
+			"write",
+			"w1",
+			{ path: "app.ts", content: lines },
+			{},
+			writeRenderers,
+			tui,
+			"/tmp",
+		);
+		const streamingOut = comp
+			.render(100)
+			.join("\n")
+			.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(streamingOut).toContain("writing 20 lines...");
+		expect(streamingOut).toContain("earlier lines, 20 total");
+		expect(streamingOut).toContain("20 │");
+		expect(streamingOut).not.toMatch(/^\s*1 │/m);
+
+		comp.setArgsComplete();
+		comp.updateResult({ content: [{ type: "text", text: "Successfully wrote to app.ts" }], isError: false }, false);
+		const doneOut = comp
+			.render(100)
+			.join("\n")
+			.replace(/\x1b\[[0-9;]*m/g, "");
+		expect(doneOut).toContain("20 lines");
+		expect(doneOut).toContain("1 │");
+		expect(doneOut).toContain("more lines, 20 total");
+	});
+
+	it("starts and stops hold-space voice dictation reliably on repeated space without Kitty release events", async () => {
+		const { CustomEditor } = await import("../src/modes/interactive/components/custom-editor.js");
+		const tui = { requestRender: () => {} } as any;
+		const kb = new KeybindingsManager();
+		const editor = new CustomEditor(tui, { borderColor: (s: string) => s, selectList: {} as any }, kb);
+		editor.setVoiceHoldEnabled(true);
+		let started = 0;
+		let stopped = 0;
+		editor.onVoiceHoldStart = () => {
+			started++;
+		};
+		editor.onVoiceHoldStop = () => {
+			stopped++;
+		};
+
+		vi.useFakeTimers();
+		try {
+			editor.handleInput(" ");
+			expect(editor.getText()).toBe(" ");
+			vi.advanceTimersByTime(500);
+			editor.handleInput(" "); // OS key repeat
+			expect(started).toBe(1);
+			expect(editor.getText()).toBe("");
+			vi.advanceTimersByTime(950);
+			expect(stopped).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("renders footer without provider prefix even with multiple providers", () => {

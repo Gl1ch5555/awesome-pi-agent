@@ -405,10 +405,13 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				type?: string;
 				function?: { name?: string; arguments?: string };
 				custom?: { name?: string; input?: string };
+				extra_content?: { google?: { thought_signature?: string } };
 			};
 
 			let textBlock: TextContent | null = null;
 			let thinkingBlock: ThinkingContent | null = null;
+			let inlineThinkMode: "none" | "pending" | "inside" | "done" = "none";
+			let inlineThinkBuffer = "";
 			let hasFinishReason = false;
 			const toolCallBlocksByIndex = new Map<number, ToolCall>();
 			const toolCallBlocksById = new Map<string, ToolCall>();
@@ -623,19 +626,118 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						}
 					}
 
+					const googleDelta = (
+						deltaFields.extra_content as
+							| { google?: { thought?: boolean; thought_signature?: string } }
+							| undefined
+					)?.google;
+
 					if (
 						choice.delta.content !== null &&
 						choice.delta.content !== undefined &&
 						choice.delta.content.length > 0
 					) {
-						const block = ensureTextBlock();
-						block.text += choice.delta.content;
-						stream.push({
-							type: "text_delta",
-							contentIndex: getContentIndex(block),
-							delta: choice.delta.content,
-							partial: output,
-						});
+						if (googleDelta?.thought === true) {
+							const block = ensureThinkingBlock("google");
+							block.thinking += choice.delta.content;
+							stream.push({
+								type: "thinking_delta",
+								contentIndex: getContentIndex(block),
+								delta: choice.delta.content,
+								partial: output,
+							});
+						} else {
+							const emitTextDelta = (textDelta: string) => {
+								if (!textDelta) return;
+								const block = ensureTextBlock();
+								block.text += textDelta;
+								if (googleDelta?.thought_signature) {
+									block.textSignature = googleDelta.thought_signature;
+								}
+								stream.push({
+									type: "text_delta",
+									contentIndex: getContentIndex(block),
+									delta: textDelta,
+									partial: output,
+								});
+							};
+
+							const emitThoughtDelta = (thoughtDelta: string) => {
+								if (!thoughtDelta) return;
+								const block = ensureThinkingBlock("google");
+								block.thinking += thoughtDelta;
+								stream.push({
+									type: "thinking_delta",
+									contentIndex: getContentIndex(block),
+									delta: thoughtDelta,
+									partial: output,
+								});
+							};
+
+							// Support leading <think>...</think> tags returned by some OpenAI-compat Gemini proxies
+							let chunkText = choice.delta.content;
+							if (inlineThinkMode === "none") {
+								if (
+									!textBlock &&
+									!thinkingBlock &&
+									(chunkText.startsWith("<think>") || "<think>".startsWith(chunkText))
+								) {
+									inlineThinkMode = "pending";
+								} else {
+									inlineThinkMode = "done";
+								}
+							}
+
+							if (inlineThinkMode === "pending") {
+								inlineThinkBuffer += chunkText;
+								if (inlineThinkBuffer.startsWith("<think>")) {
+									inlineThinkMode = "inside";
+									chunkText = inlineThinkBuffer.slice("<think>".length);
+									inlineThinkBuffer = "";
+								} else if (!"<think>".startsWith(inlineThinkBuffer)) {
+									inlineThinkMode = "done";
+									chunkText = inlineThinkBuffer;
+									inlineThinkBuffer = "";
+								} else {
+									chunkText = "";
+								}
+							}
+
+							if (inlineThinkMode === "inside" && chunkText) {
+								const combined = inlineThinkBuffer + chunkText;
+								inlineThinkBuffer = "";
+								const closeIdx = combined.indexOf("</think>");
+								if (closeIdx !== -1) {
+									emitThoughtDelta(combined.slice(0, closeIdx));
+									inlineThinkMode = "done";
+									const remainder = combined.slice(closeIdx + "</think>".length).replace(/^\n+/, "");
+									emitTextDelta(remainder);
+								} else {
+									// Hold back potential partial "</think>" suffix
+									let hold = 0;
+									const closeTag = "</think>";
+									for (let k = Math.min(closeTag.length - 1, combined.length); k > 0; k--) {
+										if (combined.endsWith(closeTag.slice(0, k))) {
+											hold = k;
+											break;
+										}
+									}
+									if (hold > 0) {
+										emitThoughtDelta(combined.slice(0, -hold));
+										inlineThinkBuffer = combined.slice(-hold);
+									} else {
+										emitThoughtDelta(combined);
+									}
+								}
+							} else if (inlineThinkMode === "done" && chunkText) {
+								emitTextDelta(chunkText);
+							}
+						}
+					} else if (googleDelta?.thought_signature) {
+						const activeTextBlock = textBlock as TextContent | null;
+						if (activeTextBlock) {
+							activeTextBlock.textSignature = googleDelta.thought_signature;
+						}
 					}
 
 					if (choice?.delta?.tool_calls) {
@@ -648,6 +750,10 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 							const name = toolCall.function?.name ?? toolCall.custom?.name;
 							if (!block.name && name) {
 								block.name = name;
+							}
+							const googleToolSig = toolCall.extra_content?.google?.thought_signature;
+							if (typeof googleToolSig === "string" && googleToolSig.length > 0) {
+								block.thoughtSignature = googleToolSig;
 							}
 
 							let delta = "";
@@ -669,6 +775,29 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						}
 					}
 				}
+			}
+
+			if (inlineThinkBuffer) {
+				if (inlineThinkMode === "inside") {
+					const block = ensureThinkingBlock("google");
+					block.thinking += inlineThinkBuffer;
+					stream.push({
+						type: "thinking_delta",
+						contentIndex: getContentIndex(block),
+						delta: inlineThinkBuffer,
+						partial: output,
+					});
+				} else {
+					const block = ensureTextBlock();
+					block.text += inlineThinkBuffer;
+					stream.push({
+						type: "text_delta",
+						contentIndex: getContentIndex(block),
+						delta: inlineThinkBuffer,
+						partial: output,
+					});
+				}
+				inlineThinkBuffer = "";
 			}
 
 			for (const block of blocks) {
@@ -957,12 +1086,40 @@ function buildParams(
 		} else if (model.thinkingLevelMap?.off !== null) {
 			stringThinkingParams.thinking = model.thinkingLevelMap?.off ?? "none";
 		}
+	} else if (compat.thinkingFormat === "google" && model.reasoning) {
+		if (options?.reasoningEffort) {
+			const mapped = model.thinkingLevelMap?.[options.reasoningEffort];
+			const effort = mapped === undefined ? options.reasoningEffort : mapped;
+			if (typeof effort === "string") {
+				const normalized = effort.toLowerCase();
+				const isProOrV4 = /gemini-(?:4|3(?:\.\d+)?-pro)/i.test(model.id);
+				const googleLevel =
+					normalized === "xhigh" || normalized === "max"
+						? "HIGH"
+						: normalized === "minimal" && isProOrV4
+							? "LOW"
+							: normalized === "minimal" ||
+									normalized === "low" ||
+									normalized === "medium" ||
+									normalized === "high"
+								? normalized.toUpperCase()
+								: undefined;
+				if (googleLevel) {
+					(params as any).google = {
+						thinking_config: {
+							include_thoughts: true,
+							thinking_level: googleLevel,
+						},
+					};
+				}
+			}
+		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
 		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
-		if (typeof offValue === "string") {
+		if (typeof offValue === "string" && !(offValue === "off" && /gemini-/i.test(model.id))) {
 			(params as any).reasoning_effort = offValue;
 		}
 	}
@@ -1365,6 +1522,10 @@ export function convertMessages(
 							},
 						};
 					}
+					const isGoogleToolSig =
+						typeof tc.thoughtSignature === "string" &&
+						tc.thoughtSignature.length > 0 &&
+						!parseLegacyEncryptedReasoningDetail(tc.thoughtSignature);
 					return {
 						id: tc.id,
 						type: "function",
@@ -1372,6 +1533,7 @@ export function convertMessages(
 							name: tc.name,
 							arguments: JSON.stringify(tc.arguments),
 						},
+						...(isGoogleToolSig ? { extra_content: { google: { thought_signature: tc.thoughtSignature } } } : {}),
 					};
 				});
 			}
@@ -1638,6 +1800,14 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		isZai;
 
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
+	const isGemini3Plus =
+		/(?:^|\/)(?:gemini-(?:[3-9]|[1-9]\d)|gemma-?4)/i.test(model.id) &&
+		!isNonStandard &&
+		!isOpenRouter &&
+		provider !== "github-copilot" &&
+		provider !== "opencode" &&
+		provider !== "opencode-go" &&
+		provider !== "vercel-ai-gateway";
 	const isOpenRouterDeveloperRoleModel =
 		isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
 	const cacheControlFormat = provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
@@ -1666,7 +1836,9 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 						? "ant-ling"
 						: isOpenRouter
 							? "openrouter"
-							: "openai",
+							: isGemini3Plus
+								? "google"
+								: "openai",
 		openRouterRouting: {},
 		vercelGatewayRouting: {},
 		chatTemplateKwargs: {},

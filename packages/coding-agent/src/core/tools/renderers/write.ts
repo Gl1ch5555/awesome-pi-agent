@@ -105,9 +105,11 @@ function trimTrailingEmptyLines(lines: readonly string[]): string[] {
 	}
 	return lines.slice(0, end);
 }
+const WRITE_PREVIEW_LINES = 12;
+
 function formatWriteCall(
 	args: { path?: string; file_path?: string; content?: string } | undefined,
-	options: ToolRenderResultOptions,
+	options: ToolRenderResultOptions & { argsComplete: boolean; executionStarted: boolean },
 	theme: Theme,
 	cache: WriteHighlightCache | undefined,
 	highlighter: CodeHighlighter,
@@ -127,11 +129,35 @@ function formatWriteCall(
 			: normalizeDisplayText(fileContent).split("\n");
 		const lines = trimTrailingEmptyLines(renderedLines);
 		const totalLines = lines.length;
-		const maxLines = options.expanded ? lines.length : 10;
-		const displayLines = lines.slice(0, maxLines);
-		const remaining = lines.length - maxLines;
-		text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-		if (remaining > 0) {
+		const isStreamingArgs = options.isPartial && !options.argsComplete && !options.executionStarted;
+		if (totalLines > 0) {
+			const statusLabel = isStreamingArgs
+				? `· writing ${totalLines} ${totalLines === 1 ? "line" : "lines"}...`
+				: options.isPartial
+					? `· writing ${totalLines} ${totalLines === 1 ? "line" : "lines"}`
+					: `· ${totalLines} ${totalLines === 1 ? "line" : "lines"}`;
+			text += ` ${theme.fg("muted", statusLabel)}`;
+		}
+
+		const maxLines = options.expanded ? lines.length : WRITE_PREVIEW_LINES;
+		const shouldTail = isStreamingArgs && !options.expanded && totalLines > maxLines;
+		const startIndex = shouldTail ? totalLines - maxLines : 0;
+		const displayLines = shouldTail ? lines.slice(startIndex) : lines.slice(0, maxLines);
+		const remaining = totalLines - maxLines;
+		const gutterWidth = Math.max(1, String(totalLines).length);
+
+		text += "\n\n";
+		if (shouldTail && startIndex > 0) {
+			text += `${theme.fg("muted", `... (${startIndex} earlier lines, ${totalLines} total)`)}\n`;
+		}
+		text += displayLines
+			.map((line, idx) => {
+				const lineNum = String(startIndex + idx + 1).padStart(gutterWidth);
+				const body = lang ? line : theme.fg("toolOutput", replaceTabs(line));
+				return `${theme.fg("dim", `${lineNum} │ `)}${body}`;
+			})
+			.join("\n");
+		if (!shouldTail && remaining > 0) {
 			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
 	}
@@ -169,7 +195,12 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		component.setText(
 			formatWriteCall(
 				renderArgs,
-				{ expanded: context.expanded, isPartial: context.isPartial },
+				{
+					expanded: context.expanded,
+					isPartial: context.isPartial,
+					argsComplete: context.argsComplete,
+					executionStarted: context.executionStarted,
+				},
 				theme,
 				component.cache,
 				component.highlighter,

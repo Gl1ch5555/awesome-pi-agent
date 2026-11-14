@@ -132,6 +132,7 @@ import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { LiveVoiceSession } from "../../core/voice/groq-whisper.ts";
+import { warmupRecorderBackend } from "../../core/voice/voice-recorder.ts";
 import { addMcpServerConfig } from "../../extensions/mcp/config.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
@@ -3315,9 +3316,17 @@ export class InteractiveMode {
 		this.defaultEditor.onTextPaste = (pasted) => this.tryHandleImagePathPaste(pasted);
 
 		const voiceSettings = this.settingsManager.getVoiceSettings();
-		this.defaultEditor.setVoiceHoldEnabled(
-			voiceSettings.enabled !== false && voiceSettings.holdSpaceToTalk !== false,
-		);
+		const voiceHoldEnabled = voiceSettings.enabled !== false && voiceSettings.holdSpaceToTalk !== false;
+		this.defaultEditor.setVoiceHoldEnabled(voiceHoldEnabled);
+		if (voiceHoldEnabled) {
+			setTimeout(() => {
+				try {
+					warmupRecorderBackend();
+				} catch {
+					// Ignore warmup failures; actual errors surface when recording starts
+				}
+			}, 50).unref?.();
+		}
 		this.defaultEditor.onVoiceHoldStart = () => {
 			this.startVoiceDictation();
 		};

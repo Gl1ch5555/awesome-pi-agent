@@ -683,13 +683,11 @@ export class ProviderManagerComponent extends Container implements Focusable {
 				if (model) {
 					model.reasoning = !model.reasoning;
 					if (model.reasoning && !model.thinkingLevelMap) {
-						model.thinkingLevelMap = {
-							off: "off",
+						model.thinkingLevelMap = inferModelMetadata({ id: model.id, reasoning: true }).thinkingLevelMap ?? {
 							minimal: "minimal",
 							low: "low",
 							medium: "medium",
 							high: "high",
-							xhigh: "xhigh",
 						};
 					}
 					this.rebuild();

@@ -2007,4 +2007,103 @@ describe("openai-completions tool_choice", () => {
 
 		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
 	});
+
+	it("sends google.thinking_config and parses extra_content.google.thought and thought_signature for Gemini 4", async () => {
+		const gemini4 = {
+			...localOpenAICompletionsModel,
+			id: "gemini-4-hydrogen",
+			name: "gemini-4-hydrogen",
+			reasoning: true,
+			thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null },
+		} satisfies Model<"openai-completions">;
+
+		const params = (await captureSimpleParams(gemini4, "high")) as {
+			google?: unknown;
+			reasoning_effort?: unknown;
+		};
+		expect(params.google).toEqual({
+			thinking_config: { include_thoughts: true, thinking_level: "HIGH" },
+		});
+		expect(params.reasoning_effort).toBeUndefined();
+
+		mockState.chunks = [
+			{
+				id: "chatcmpl-g4-1",
+				choices: [
+					{
+						delta: { content: "Checking the math...", extra_content: { google: { thought: true } } },
+						finish_reason: null,
+					},
+				],
+			},
+			{
+				id: "chatcmpl-g4-1",
+				choices: [
+					{
+						delta: {
+							tool_calls: [
+								{
+									index: 0,
+									id: "call_g4_1",
+									type: "function",
+									function: { name: "write", arguments: '{"path":"a.txt","content":"hi"}' },
+									extra_content: { google: { thought_signature: "SIG123" } },
+								},
+							],
+						},
+						finish_reason: null,
+					},
+				],
+			},
+			{
+				id: "chatcmpl-g4-1",
+				choices: [{ delta: { content: "" }, finish_reason: "tool_calls" }],
+			},
+		];
+
+		const res = await streamSimple(
+			gemini4,
+			{ messages: [{ role: "user", content: "Write a.txt", timestamp: Date.now() }] },
+			{ apiKey: "test-key", reasoning: "high" },
+		).result();
+
+		expect(res.content[0]).toMatchObject({ type: "thinking", thinking: "Checking the math..." });
+		expect(res.content[1]).toMatchObject({
+			type: "toolCall",
+			id: "call_g4_1",
+			name: "write",
+			thoughtSignature: "SIG123",
+		});
+
+		// Verify thought_signature is replayed on turn 2
+		const turn2Params = await captureSimpleParams(gemini4, "high");
+		expect(turn2Params).toBeDefined();
+		let replayPayload: any;
+		await streamSimple(
+			gemini4,
+			{
+				messages: [
+					{ role: "user", content: "Write a.txt", timestamp: Date.now() },
+					res,
+					{
+						role: "toolResult",
+						toolCallId: "call_g4_1",
+						toolName: "write",
+						content: [{ type: "text", text: "ok" }],
+						isError: false,
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test-key",
+				reasoning: "high",
+				onPayload: (p) => {
+					replayPayload = p;
+				},
+			},
+		).result();
+		const replayedAssistant = replayPayload.messages.find((m: any) => m.role === "assistant");
+		expect(replayedAssistant.tool_calls[0].extra_content).toEqual({ google: { thought_signature: "SIG123" } });
+	});
 });

@@ -42,6 +42,7 @@ export class CustomEditor extends Editor {
 	private voiceArmingTimer: ReturnType<typeof setTimeout> | undefined;
 	private voiceReleaseWatchdog: ReturnType<typeof setTimeout> | undefined;
 	private voiceArmingInsertedSpace = false;
+	private seenKittyKeyRelease = false;
 
 	constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, options?: CustomEditorOptions) {
 		super(tui, theme, options);
@@ -85,14 +86,18 @@ export class CustomEditor extends Editor {
 		}
 	}
 
+	private needsReleaseWatchdog(): boolean {
+		return !isKittyProtocolActive() || !this.seenKittyKeyRelease;
+	}
+
 	private startVoiceRecording(): void {
 		this.clearVoiceTimers();
 		this.removeArmingSpaceIfPresent();
 		this.voiceState = "recording";
-		if (!isKittyProtocolActive()) {
+		this.onVoiceHoldStart?.();
+		if (this.voiceState === "recording" && this.needsReleaseWatchdog()) {
 			this.bumpVoiceReleaseWatchdog();
 		}
-		this.onVoiceHoldStart?.();
 	}
 
 	private bumpVoiceReleaseWatchdog(): void {
@@ -104,7 +109,7 @@ export class CustomEditor extends Editor {
 				this.resetVoiceState();
 				this.onVoiceHoldStop?.();
 			}
-		}, 450);
+		}, 900);
 	}
 
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {
@@ -166,6 +171,7 @@ export class CustomEditor extends Editor {
 	handleInput(data: string): void {
 		// Always consume key release events cleanly; stop voice recording if Space was released.
 		if (isKeyRelease(data)) {
+			this.seenKittyKeyRelease = true;
 			if (matchesKey(data, "space")) {
 				if (this.voiceState === "arming") {
 					this.resetVoiceState();
@@ -182,7 +188,7 @@ export class CustomEditor extends Editor {
 
 		if (this.voiceState === "recording") {
 			if (isSpaceInput || isSpaceRepeat) {
-				if (!isKittyProtocolActive()) {
+				if (this.needsReleaseWatchdog()) {
 					this.bumpVoiceReleaseWatchdog();
 				}
 				return;
@@ -204,7 +210,7 @@ export class CustomEditor extends Editor {
 					this.voiceState = "arming";
 					this.voiceArmingInsertedSpace = true;
 					super.handleInput(data);
-					const delay = isKittyProtocolActive() ? 300 : 650;
+					const delay = isKittyProtocolActive() ? 300 : 1100;
 					this.voiceArmingTimer = setTimeout(() => {
 						if (this.voiceState !== "arming") return;
 						if (isKittyProtocolActive()) {
