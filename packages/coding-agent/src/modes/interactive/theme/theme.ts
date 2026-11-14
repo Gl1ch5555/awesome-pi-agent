@@ -381,9 +381,11 @@ let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
+		const graphitePath = path.join(themesDir, "graphite.json");
 		const darkPath = path.join(themesDir, "dark.json");
 		const lightPath = path.join(themesDir, "light.json");
 		BUILTIN_THEMES = {
+			graphite: JSON.parse(stripBom(fs.readFileSync(graphitePath, "utf-8"))) as ThemeJson,
 			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
 			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
 		};
@@ -742,6 +744,7 @@ function startThemeWatcher(): void {
 	// Only watch if it's a custom theme (not built-in)
 	if (
 		!currentThemeName ||
+		currentThemeName === "graphite" ||
 		currentThemeName === "dark" ||
 		currentThemeName === "light" ||
 		currentThemeName === SYSTEM_THEME_NAME

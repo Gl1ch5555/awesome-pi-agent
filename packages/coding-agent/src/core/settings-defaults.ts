@@ -64,4 +64,16 @@ export const SETTINGS_DEFAULTS = {
 	fullscreenScrollbar: "auto",
 	fullscreenCopyOnSelect: true,
 	fullscreenWheelScrollLines: "auto",
+	voice: {
+		enabled: true,
+		model: "whisper-large-v3",
+		language: "auto",
+		holdSpaceToTalk: true,
+		chunkIntervalMs: 1500,
+	},
+	search: {
+		enabled: true,
+		provider: "tavily",
+	},
+	onboardingCompleted: false,
 } as const;

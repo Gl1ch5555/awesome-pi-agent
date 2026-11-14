@@ -36,6 +36,10 @@ export class StatusIndicator extends Loader {
 }
 
 export class WorkingStatusIndicator extends StatusIndicator {
+	private startedAt = Date.now();
+	private baseMessage: string;
+	private elapsedTimer: ReturnType<typeof setInterval> | undefined;
+
 	constructor(ui: TUI, message: string, indicator?: WorkingIndicatorOptions, colorFn?: (text: string) => string) {
 		super(
 			"working",
@@ -43,8 +47,27 @@ export class WorkingStatusIndicator extends StatusIndicator {
 			colorFn ?? ((text) => theme.fg("accent", text)),
 			colorFn ?? ((text) => theme.fg("muted", text)),
 			message,
-			indicator,
+			indicator ?? { frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], intervalMs: 70 },
 		);
+		this.baseMessage = message;
+		this.elapsedTimer = setInterval(() => {
+			const elapsedSec = ((Date.now() - this.startedAt) / 1000).toFixed(1);
+			super.setMessage(`${this.baseMessage} · ${elapsedSec}s`);
+		}, 150);
+	}
+
+	override setMessage(message: string): void {
+		this.baseMessage = message;
+		const elapsedSec = ((Date.now() - this.startedAt) / 1000).toFixed(1);
+		super.setMessage(`${this.baseMessage} · ${elapsedSec}s`);
+	}
+
+	override dispose(): void {
+		if (this.elapsedTimer) {
+			clearInterval(this.elapsedTimer);
+			this.elapsedTimer = undefined;
+		}
+		super.dispose();
 	}
 }
 

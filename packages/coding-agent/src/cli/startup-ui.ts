@@ -17,6 +17,10 @@ import {
 	FirstTimeSetupComponent,
 	type FirstTimeSetupResult,
 } from "../modes/interactive/components/first-time-setup.ts";
+import {
+	OnboardingWizardComponent,
+	type OnboardingWizardResult,
+} from "../modes/interactive/components/onboarding-wizard.ts";
 import { SYSTEM_THEME_NAME } from "../modes/interactive/theme/system-theme.ts";
 import {
 	getTerminalTheme,
@@ -175,6 +179,62 @@ export async function showStartupSelector<T>(
 		ui.addChild(selector);
 		ui.setFocus(selector);
 		startStartupTui(ui, settingsManager);
+	});
+}
+
+export function shouldRunOnboardingWizard(settingsManager: SettingsManager): boolean {
+	if (process.env.PI_NO_ONBOARDING === "1") return false;
+	if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+	if (process.env[ENV_AGENT_DIR]) return false;
+	return !settingsManager.getOnboardingCompleted();
+}
+
+export async function showOnboardingWizard(settingsManager: SettingsManager): Promise<void> {
+	const ui = await createStartupTui(settingsManager);
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = async (result: OnboardingWizardResult | undefined) => {
+			if (settled) return;
+			settled = true;
+			if (result) {
+				settingsManager.setTheme(result.theme);
+				settingsManager.setSearchProvider(result.searchProvider);
+				if (result.searchApiKey) {
+					settingsManager.setSearchApiKey(result.searchProvider, result.searchApiKey);
+				}
+				if (result.searxngUrl) {
+					settingsManager.setSearchExtras({ searxngUrl: result.searxngUrl });
+				}
+				if (result.groqApiKey) {
+					settingsManager.setVoiceSettings({ groqApiKey: result.groqApiKey, enabled: true });
+				}
+			} else if (!settingsManager.getThemeSetting()) {
+				settingsManager.setTheme("graphite");
+			}
+			settingsManager.setOnboardingCompleted(true);
+			await settingsManager.flush();
+			await clearStartupTui(ui);
+			ui.stop();
+			resolve();
+		};
+
+		ui.start();
+		let previewTheme = settingsManager.getThemeSetting() ?? "graphite";
+		setTheme(previewTheme);
+		const wizard = new OnboardingWizardComponent({
+			tui: ui,
+			onThemePreview: (themeName) => {
+				previewTheme = themeName;
+				setTheme(themeName);
+				ui.requestRender();
+			},
+			onComplete: (result) => void finish(result),
+			onSkip: () => void finish(undefined),
+		});
+		ui.addChild(wizard);
+		ui.setFocus(wizard);
+		ui.requestRender();
+		queryStartupTerminalColors(ui, () => setTheme(previewTheme));
 	});
 }
 

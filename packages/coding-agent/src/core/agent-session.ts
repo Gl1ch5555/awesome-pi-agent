@@ -3789,6 +3789,8 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					webSearch: { getSettings: () => this.settingsManager.getSearchSettings() },
+					webFetch: { getSettings: () => this.settingsManager.getSearchSettings() },
 				});
 
 		this._baseToolDefinitions = new Map(

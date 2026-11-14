@@ -303,6 +303,12 @@ export class Editor implements Component, Focusable {
 
 	/** Focusable interface - set by TUI when focus changes */
 	focused: boolean = false;
+	/** Opt in to key release events (used by voice hold-Space). */
+	wantsKeyRelease?: boolean = false;
+	/** Optional hook called when an empty bracketed paste arrives (e.g. terminal Ctrl+V on bitmap clipboard). */
+	onEmptyPaste?: () => void;
+	/** Optional hook to intercept bracketed paste text before default insertion. Return true if handled. */
+	onTextPaste?: (text: string) => boolean;
 
 	/** The open autocomplete menu receives fullscreen viewport keys, such as PageUp/PageDown. */
 	get capturesViewportInput(): boolean {
@@ -735,7 +741,11 @@ export class Editor implements Component, Focusable {
 			if (endIndex !== -1) {
 				const pasteContent = this.pasteBuffer.substring(0, endIndex);
 				if (pasteContent.length > 0) {
-					this.handlePaste(pasteContent);
+					if (!this.onTextPaste?.(pasteContent)) {
+						this.handlePaste(pasteContent);
+					}
+				} else {
+					this.onEmptyPaste?.();
 				}
 				this.isInPaste = false;
 				const remaining = this.pasteBuffer.substring(endIndex + 6);

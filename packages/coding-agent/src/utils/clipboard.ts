@@ -77,10 +77,50 @@ export async function readClipboardText(): Promise<string | null> {
 	}
 }
 
-/** Read file paths, such as Finder file copies, from the native clipboard. */
+/** Read file paths, such as Finder or Explorer file copies, from the clipboard. */
 export async function readClipboardFilePaths(): Promise<string[] | null> {
-	const paths = await getNativeClipboard()?.getFilePaths?.();
-	return paths?.length ? paths : null;
+	const nativePaths = await getNativeClipboard()?.getFilePaths?.();
+	if (nativePaths?.length) return nativePaths;
+
+	const p = platform();
+	if (p === "win32") {
+		const psScript = "Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName } | Where-Object { $_ }";
+		const out = await runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
+			timeoutMs: 3000,
+		});
+		if (out) {
+			const paths = out
+				.toString("utf8")
+				.split(/\r?\n/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+			if (paths.length > 0) return paths;
+		}
+	} else if (p === "linux") {
+		const uriCommands: [string, string[]][] = [];
+		if (process.env.WAYLAND_DISPLAY) uriCommands.push(["wl-paste", ["--no-newline", "--type", "text/uri-list"]]);
+		if (process.env.DISPLAY) uriCommands.push(["xclip", ["-selection", "clipboard", "-t", "text/uri-list", "-o"]]);
+		for (const [cmd, args] of uriCommands) {
+			const out = await runClipboardCommand(cmd, args, { timeoutMs: 1500 });
+			if (out) {
+				const uris = out
+					.toString("utf8")
+					.split(/\r?\n/)
+					.map((s) => s.trim())
+					.filter((s) => s.startsWith("file://"))
+					.map((s) => {
+						try {
+							return decodeURIComponent(new URL(s).pathname);
+						} catch {
+							return "";
+						}
+					})
+					.filter(Boolean);
+				if (uris.length > 0) return uris;
+			}
+		}
+	}
+	return null;
 }
 
 export async function copyToClipboard(text: string): Promise<void> {

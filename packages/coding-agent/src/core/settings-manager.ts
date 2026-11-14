@@ -18,11 +18,15 @@ import type {
 	MermaidRenderingMode,
 	PackageSource,
 	QuietStartup,
+	SearchProviderId,
+	SearchSettings,
 	SessionShareDestination,
 	Settings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
+	VoiceModel,
+	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
 
@@ -42,12 +46,16 @@ export type {
 	ProviderRetrySettings,
 	QuietStartup,
 	RetrySettings,
+	SearchProviderId,
+	SearchSettings,
 	SessionShareDestination,
 	Settings,
 	TerminalSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
+	VoiceModel,
+	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
 /** Cache-warming profile. "idle" also warms between agent runs. */
@@ -82,7 +90,7 @@ function deepMergeObjects(base: Record<string, unknown>, overrides: Record<strin
 }
 
 /** Tools enabled at startup when `defaultTools` does not change them. */
-export const DEFAULT_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write"];
+export const DEFAULT_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write", "web_search", "web_fetch"];
 
 /** Whether a tool selection entry is a `+name` or `-name` modifier. */
 export function isToolModifier(entry: unknown): boolean {
@@ -1451,6 +1459,109 @@ export class SettingsManager {
 	setWarnings(warnings: WarningSettings): void {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
+		this.save();
+	}
+
+	getOnboardingCompleted(): boolean {
+		return this.settings.onboardingCompleted ?? SETTINGS_DEFAULTS.onboardingCompleted;
+	}
+
+	setOnboardingCompleted(completed: boolean): void {
+		this.globalSettings.onboardingCompleted = completed;
+		this.markModified("onboardingCompleted");
+		this.save();
+	}
+
+	getVoiceSettings(): VoiceSettings {
+		return {
+			enabled: this.settings.voice?.enabled ?? SETTINGS_DEFAULTS.voice.enabled,
+			groqApiKey: this.settings.voice?.groqApiKey,
+			model: this.settings.voice?.model ?? SETTINGS_DEFAULTS.voice.model,
+			language: this.settings.voice?.language ?? SETTINGS_DEFAULTS.voice.language,
+			holdSpaceToTalk: this.settings.voice?.holdSpaceToTalk ?? SETTINGS_DEFAULTS.voice.holdSpaceToTalk,
+			chunkIntervalMs: this.settings.voice?.chunkIntervalMs ?? SETTINGS_DEFAULTS.voice.chunkIntervalMs,
+		};
+	}
+
+	getVoiceGroqApiKey(): string | undefined {
+		const configured = this.settings.voice?.groqApiKey?.trim();
+		if (configured) return configured;
+		const envKey = process.env.GROQ_API_KEY?.trim();
+		return envKey || undefined;
+	}
+
+	setVoiceSettings(patch: Partial<VoiceSettings>): void {
+		this.globalSettings.voice ??= {};
+		if (patch.enabled !== undefined) {
+			this.globalSettings.voice.enabled = patch.enabled;
+			this.markModified("voice", "enabled");
+		}
+		if (patch.groqApiKey !== undefined) {
+			this.globalSettings.voice.groqApiKey = patch.groqApiKey || undefined;
+			this.markModified("voice", "groqApiKey");
+		}
+		if (patch.model !== undefined) {
+			this.globalSettings.voice.model = patch.model;
+			this.markModified("voice", "model");
+		}
+		if (patch.language !== undefined) {
+			this.globalSettings.voice.language = patch.language;
+			this.markModified("voice", "language");
+		}
+		if (patch.holdSpaceToTalk !== undefined) {
+			this.globalSettings.voice.holdSpaceToTalk = patch.holdSpaceToTalk;
+			this.markModified("voice", "holdSpaceToTalk");
+		}
+		if (patch.chunkIntervalMs !== undefined) {
+			this.globalSettings.voice.chunkIntervalMs = patch.chunkIntervalMs;
+			this.markModified("voice", "chunkIntervalMs");
+		}
+		this.save();
+	}
+
+	getSearchSettings(): SearchSettings {
+		return {
+			enabled: this.settings.search?.enabled ?? SETTINGS_DEFAULTS.search.enabled,
+			provider: this.settings.search?.provider ?? SETTINGS_DEFAULTS.search.provider,
+			apiKeys: { ...(this.settings.search?.apiKeys ?? {}) },
+			searxngUrl: this.settings.search?.searxngUrl,
+			googleCseId: this.settings.search?.googleCseId,
+		};
+	}
+
+	setSearchProvider(provider: SearchProviderId): void {
+		this.globalSettings.search ??= {};
+		this.globalSettings.search.provider = provider;
+		this.markModified("search", "provider");
+		this.save();
+	}
+
+	setSearchApiKey(provider: string, apiKey: string | undefined): void {
+		this.globalSettings.search ??= {};
+		this.globalSettings.search.apiKeys ??= {};
+		if (apiKey && apiKey.trim()) {
+			this.globalSettings.search.apiKeys[provider] = apiKey.trim();
+		} else {
+			delete this.globalSettings.search.apiKeys[provider];
+		}
+		this.markModified("search", "apiKeys");
+		this.save();
+	}
+
+	setSearchExtras(extras: { enabled?: boolean; searxngUrl?: string; googleCseId?: string }): void {
+		this.globalSettings.search ??= {};
+		if (extras.enabled !== undefined) {
+			this.globalSettings.search.enabled = extras.enabled;
+			this.markModified("search", "enabled");
+		}
+		if (extras.searxngUrl !== undefined) {
+			this.globalSettings.search.searxngUrl = extras.searxngUrl.trim() || undefined;
+			this.markModified("search", "searxngUrl");
+		}
+		if (extras.googleCseId !== undefined) {
+			this.globalSettings.search.googleCseId = extras.googleCseId.trim() || undefined;
+			this.markModified("search", "googleCseId");
+		}
 		this.save();
 	}
 }

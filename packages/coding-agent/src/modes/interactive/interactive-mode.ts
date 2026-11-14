@@ -129,11 +129,18 @@ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { LiveVoiceSession } from "../../core/voice/groq-whisper.ts";
 import { addMcpServerConfig } from "../../extensions/mcp/config.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
+import {
+	extractMultipleImagePathsFromText,
+	type PendingImageAttachment,
+	resolvePromptImages,
+	tryResolveImagePath,
+} from "../../utils/image-attachments.ts";
 import { ensurePngTranscoder } from "../../utils/image-convert.ts";
 import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
@@ -171,6 +178,7 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
+import { ProviderManagerComponent } from "./components/provider-manager.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
@@ -191,6 +199,7 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { VoiceIndicatorComponent } from "./components/voice-indicator.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
@@ -494,8 +503,11 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
-	private onInputCallback?: (text: string) => void;
-	private pendingUserInputs: string[] = [];
+	private onInputCallback?: (input: { text: string; images?: ImageContent[] }) => void;
+	private pendingUserInputs: Array<{ text: string; images?: ImageContent[] }> = [];
+	private pendingImageAttachments: PendingImageAttachment[] = [];
+	private activeVoiceSession: LiveVoiceSession | undefined = undefined;
+	private voiceIndicator: VoiceIndicatorComponent | undefined = undefined;
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
@@ -1083,7 +1095,8 @@ export class InteractiveMode {
 					rawKeyHint("!!", "to run bash (no context)"),
 					hint("app.message.followUp", "to queue follow-up"),
 					hint("app.message.dequeue", "to edit all queued messages"),
-					hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
+					hint("app.clipboard.pasteImage", "to paste images, paths, or text"),
+					rawKeyHint("hold Space", "for voice dictation"),
 					rawKeyHint("drop files", "to attach"),
 				].join("\n");
 			const compactInstructions = () =>
@@ -1293,7 +1306,9 @@ export class InteractiveMode {
 		while (true) {
 			const userInput = await this.getUserInput();
 			try {
-				await this.session.prompt(userInput);
+				await this.session.prompt(userInput.text, {
+					images: userInput.images,
+				});
 			} catch (error: unknown) {
 				const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
 				this.showError(errorMessage);
@@ -3254,10 +3269,52 @@ export class InteractiveMode {
 		};
 
 		// Handle clipboard paste (triggered on Ctrl+V). Copied files use their original paths,
-		// images are attached via temporary files, and plain text is the final fallback.
+		// images are attached via `(image)` markers, and plain text is the final fallback.
 		this.defaultEditor.onPasteImage = () => {
 			void this.handleClipboardPaste();
 		};
+		this.defaultEditor.onEmptyPaste = () => {
+			void this.handleClipboardPaste();
+		};
+		this.defaultEditor.onTextPaste = (pasted) => this.tryHandleImagePathPaste(pasted);
+
+		const voiceSettings = this.settingsManager.getVoiceSettings();
+		this.defaultEditor.setVoiceHoldEnabled(
+			voiceSettings.enabled !== false && voiceSettings.holdSpaceToTalk !== false,
+		);
+		this.defaultEditor.onVoiceHoldStart = () => {
+			this.startVoiceDictation();
+		};
+		this.defaultEditor.onVoiceHoldStop = () => {
+			void this.stopVoiceDictation();
+		};
+		this.defaultEditor.onVoiceHoldCancel = () => {
+			void this.cancelVoiceDictation();
+		};
+	}
+
+	private insertImageMarkers(imagePaths: string[]): void {
+		for (const imgPath of imagePaths) {
+			this.pendingImageAttachments.push({ path: imgPath });
+		}
+		const markers = imagePaths.map(() => "(image)").join(" ");
+		const cursor = this.editor.getCursor?.();
+		const currentLine = cursor ? (this.editor.getText().split("\n")[cursor.line] ?? "") : "";
+		const characterBeforeCursor = cursor && cursor.col > 0 ? currentLine[cursor.col - 1] : "";
+		const characterAfterCursor = cursor ? currentLine[cursor.col] : "";
+		const leadingSpace = characterBeforeCursor && !/\s/.test(characterBeforeCursor) ? " " : "";
+		const trailingSpace = characterAfterCursor && !/\s/.test(characterAfterCursor) ? " " : "";
+		this.editor.insertTextAtCursor?.(`${leadingSpace}${markers}${trailingSpace}`);
+		this.ui.requestRender();
+	}
+
+	private tryHandleImagePathPaste(pastedText: string): boolean {
+		const imagePaths = extractMultipleImagePathsFromText(pastedText, this.sessionManager.getCwd());
+		if (!imagePaths || imagePaths.length === 0) {
+			return false;
+		}
+		this.insertImageMarkers(imagePaths);
+		return true;
 	}
 
 	private async handleRightClickPaste(): Promise<void> {
@@ -3281,6 +3338,12 @@ export class InteractiveMode {
 				if (filePaths.some((filePath) => /\p{Cc}/u.test(filePath))) {
 					throw new Error("Clipboard file path contains control characters");
 				}
+				const cwd = this.sessionManager.getCwd();
+				const resolvedImages = filePaths.map((p) => tryResolveImagePath(p, cwd));
+				if (!this.isBashMode && resolvedImages.every((p): p is string => Boolean(p))) {
+					this.insertImageMarkers(resolvedImages);
+					return;
+				}
 				const paths = this.isBashMode ? filePaths.map(quoteIfNeeded).join(" ") : filePaths.join("\n");
 				const cursor = this.editor.getCursor?.();
 				const currentLine = cursor ? (this.editor.getText().split("\n")[cursor.line] ?? "") : "";
@@ -3301,13 +3364,15 @@ export class InteractiveMode {
 				const filePath = path.join(tmpDir, fileName);
 				fs.writeFileSync(filePath, Buffer.from(image.bytes));
 
-				this.editor.insertTextAtCursor?.(filePath);
-				this.ui.requestRender();
+				this.insertImageMarkers([filePath]);
 				return;
 			}
 
 			const text = await readClipboardText();
 			if (text) {
+				if (!this.isBashMode && this.tryHandleImagePathPaste(text)) {
+					return;
+				}
 				this.editor.insertTextAtCursor?.(text);
 				this.ui.requestRender();
 			}
@@ -3330,6 +3395,17 @@ export class InteractiveMode {
 			if (text === "/settings") {
 				this.showSettingsSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/providers") {
+				this.editor.setText("");
+				this.showProviderManager();
+				return;
+			}
+			if (text === "/voice" || text.startsWith("/voice ")) {
+				const arg = text.slice("/voice".length).trim();
+				this.editor.setText("");
+				await this.handleVoiceCommand(arg || undefined);
 				return;
 			}
 			if (text === "/scoped-models") {
@@ -3503,7 +3579,16 @@ export class InteractiveMode {
 			if (this.session.isStreaming) {
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
-				await this.session.prompt(text, { streamingBehavior: "steer" });
+				const attachments = this.pendingImageAttachments.splice(0);
+				const resolved = await resolvePromptImages(text, attachments, {
+					cwd: this.sessionManager.getCwd(),
+					autoResizeImages: this.settingsManager.getImageAutoResize(),
+					blockImages: this.settingsManager.getBlockImages(),
+				});
+				await this.session.prompt(resolved.text, {
+					streamingBehavior: "steer",
+					images: resolved.images.length > 0 ? resolved.images : undefined,
+				});
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				return;
@@ -3513,10 +3598,21 @@ export class InteractiveMode {
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
+			const attachments = this.pendingImageAttachments.splice(0);
+			const resolved = await resolvePromptImages(text, attachments, {
+				cwd: this.sessionManager.getCwd(),
+				autoResizeImages: this.settingsManager.getImageAutoResize(),
+				blockImages: this.settingsManager.getBlockImages(),
+			});
+			const submittedInput = {
+				text: resolved.text,
+				images: resolved.images.length > 0 ? resolved.images : undefined,
+			};
+
 			if (this.onInputCallback) {
-				this.onInputCallback(text);
+				this.onInputCallback(submittedInput);
 			} else {
-				this.pendingUserInputs.push(text);
+				this.pendingUserInputs.push(submittedInput);
 			}
 			this.editor.addToHistory?.(text);
 		};
@@ -4427,16 +4523,16 @@ export class InteractiveMode {
 		);
 	}
 
-	async getUserInput(): Promise<string> {
+	async getUserInput(): Promise<{ text: string; images?: ImageContent[] }> {
 		const queuedInput = this.pendingUserInputs.shift();
 		if (queuedInput !== undefined) {
 			return queuedInput;
 		}
 
 		return new Promise((resolve) => {
-			this.onInputCallback = (text: string) => {
+			this.onInputCallback = (input: { text: string; images?: ImageContent[] }) => {
 				this.onInputCallback = undefined;
-				resolve(text);
+				resolve(input);
 			};
 		});
 	}
@@ -4475,6 +4571,9 @@ export class InteractiveMode {
 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
 		if (this.isShuttingDown) return;
 		this.isShuttingDown = true;
+		await this.activeVoiceSession?.cancel().catch(() => {});
+		this.activeVoiceSession = undefined;
+		this.voiceIndicator = undefined;
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -4677,7 +4776,16 @@ export class InteractiveMode {
 		if (this.session.isStreaming) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "followUp" });
+			const attachments = this.pendingImageAttachments.splice(0);
+			const resolved = await resolvePromptImages(text, attachments, {
+				cwd: this.sessionManager.getCwd(),
+				autoResizeImages: this.settingsManager.getImageAutoResize(),
+				blockImages: this.settingsManager.getBlockImages(),
+			});
+			await this.session.prompt(resolved.text, {
+				streamingBehavior: "followUp",
+				images: resolved.images.length > 0 ? resolved.images : undefined,
+			});
 			this.updatePendingMessagesDisplay();
 			this.ui.requestRender();
 		}
@@ -4802,6 +4910,7 @@ export class InteractiveMode {
 	// =========================================================================
 
 	clearEditor(): void {
+		this.pendingImageAttachments = [];
 		this.editor.setText("");
 		this.ui.requestRender();
 	}
@@ -5144,6 +5253,8 @@ export class InteractiveMode {
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 					fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
 					warnings: this.settingsManager.getWarnings(),
+					voice: this.settingsManager.getVoiceSettings(),
+					search: this.settingsManager.getSearchSettings(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -5324,6 +5435,23 @@ export class InteractiveMode {
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
+					onVoiceSettingsChange: (patch) => {
+						this.settingsManager.setVoiceSettings(patch);
+						const vs = this.settingsManager.getVoiceSettings();
+						this.defaultEditor.setVoiceHoldEnabled(vs.enabled !== false && vs.holdSpaceToTalk !== false);
+					},
+					onSearchProviderChange: (provider) => {
+						this.settingsManager.setSearchProvider(provider);
+					},
+					onSearchApiKeyChange: (provider, apiKey) => {
+						this.settingsManager.setSearchApiKey(provider, apiKey);
+					},
+					onSearchExtrasChange: (extras) => {
+						this.settingsManager.setSearchExtras(extras);
+					},
+					onOpenProviders: () => {
+						this.showProviderManager();
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();
@@ -5332,6 +5460,166 @@ export class InteractiveMode {
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});
+	}
+
+	private showProviderManager(startAtAdd = false): void {
+		this.showSelector((done) => {
+			const manager = new ProviderManagerComponent(
+				this.ui,
+				{
+					onSaved: async (providerId, modelIds) => {
+						await this.session.modelRuntime.refresh();
+						await this.updateAvailableProviderCount();
+						if (!this.session.model && modelIds[0]) {
+							const firstModel = this.session.modelRuntime.getModel(providerId, modelIds[0]);
+							if (firstModel) {
+								await this.session.setModel(firstModel, { persist: false });
+							}
+						}
+						this.footer.invalidate();
+						this.showStatus(`Saved provider "${providerId}" (${modelIds.length} models)`);
+					},
+					onDeleted: async (providerId) => {
+						await this.session.modelRuntime.refresh();
+						await this.updateAvailableProviderCount();
+						this.footer.invalidate();
+						this.showStatus(`Removed provider "${providerId}"`);
+					},
+					onClose: () => {
+						done();
+						this.ui.requestRender();
+					},
+				},
+				{ startAtAdd },
+			);
+			return {
+				component: manager,
+				focus: manager,
+				dispose: () => manager.dispose(),
+			};
+		});
+	}
+
+	private async handleVoiceCommand(arg?: string): Promise<void> {
+		if (arg === "toggle") {
+			if (this.activeVoiceSession) {
+				await this.stopVoiceDictation();
+			} else {
+				this.startVoiceDictation();
+			}
+			return;
+		}
+		if (arg === "off" || arg === "disable") {
+			this.settingsManager.setVoiceSettings({ enabled: false });
+			this.defaultEditor.setVoiceHoldEnabled(false);
+			this.showStatus("Voice input disabled");
+			return;
+		}
+		if (arg === "on" || arg === "enable") {
+			this.settingsManager.setVoiceSettings({ enabled: true });
+			const vs = this.settingsManager.getVoiceSettings();
+			this.defaultEditor.setVoiceHoldEnabled(vs.holdSpaceToTalk !== false);
+			this.showStatus("Voice input enabled (hold Space to dictate)");
+			return;
+		}
+		if (this.activeVoiceSession) {
+			await this.stopVoiceDictation();
+		} else {
+			this.startVoiceDictation();
+		}
+	}
+
+	private startVoiceDictation(): void {
+		if (this.activeVoiceSession) return;
+		const voiceSettings = this.settingsManager.getVoiceSettings();
+		if (voiceSettings.enabled === false) {
+			this.defaultEditor.resetVoiceState();
+			return;
+		}
+		const apiKey = this.settingsManager.getVoiceGroqApiKey();
+		if (!apiKey) {
+			this.defaultEditor.resetVoiceState();
+			this.showError("Groq API key is not set. Configure it in /settings -> Voice input (or set GROQ_API_KEY).");
+			return;
+		}
+
+		const indicator = new VoiceIndicatorComponent();
+		this.voiceIndicator = indicator;
+		this.statusContainer.clear();
+		this.statusContainer.addChild(indicator);
+
+		const session = new LiveVoiceSession(
+			{
+				apiKey,
+				model: voiceSettings.model ?? "whisper-large-v3",
+				language: voiceSettings.language ?? "auto",
+				chunkIntervalMs: voiceSettings.chunkIntervalMs ?? 1500,
+			},
+			{
+				onUpdate: (state) => {
+					indicator.updateState(state);
+					this.ui.requestRender();
+				},
+				onError: (err) => {
+					this.defaultEditor.resetVoiceState();
+					if (this.activeVoiceSession === session) {
+						this.activeVoiceSession = undefined;
+						this.voiceIndicator = undefined;
+						this.statusContainer.clear();
+						this.showError(err.message);
+					}
+				},
+			},
+		);
+
+		this.activeVoiceSession = session;
+		try {
+			session.start();
+			this.ui.requestRender();
+		} catch (error) {
+			this.activeVoiceSession = undefined;
+			this.voiceIndicator = undefined;
+			this.statusContainer.clear();
+			this.defaultEditor.resetVoiceState();
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async stopVoiceDictation(): Promise<void> {
+		const session = this.activeVoiceSession;
+		if (!session) return;
+		try {
+			const finalText = await session.stop();
+			if (this.activeVoiceSession !== session) return;
+			this.activeVoiceSession = undefined;
+			this.voiceIndicator = undefined;
+			this.statusContainer.clear();
+			if (finalText) {
+				const cursor = this.editor.getCursor?.();
+				const currentLine = cursor ? (this.editor.getText().split("\n")[cursor.line] ?? "") : "";
+				const charBefore = cursor && cursor.col > 0 ? currentLine[cursor.col - 1] : "";
+				const prefix = charBefore && !/\s/.test(charBefore) ? " " : "";
+				this.editor.insertTextAtCursor?.(`${prefix}${finalText}`);
+			}
+			this.ui.requestRender();
+		} catch (error) {
+			if (this.activeVoiceSession === session) {
+				this.activeVoiceSession = undefined;
+				this.voiceIndicator = undefined;
+				this.statusContainer.clear();
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+		}
+	}
+
+	private async cancelVoiceDictation(): Promise<void> {
+		const session = this.activeVoiceSession;
+		if (!session) return;
+		this.activeVoiceSession = undefined;
+		this.voiceIndicator = undefined;
+		this.statusContainer.clear();
+		await session.cancel().catch(() => {});
+		this.ui.requestRender();
 	}
 
 	private handleThinkingCommand(searchTerm?: string): void {

@@ -623,6 +623,132 @@
         }
       }
     },
+    "voice": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable built-in voice input (hold Space to dictate).",
+          "default": true
+        },
+        "groqApiKey": {
+          "type": "string",
+          "description": "Groq API key for Whisper live transcription."
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "whisper-large-v3"
+            },
+            {
+              "type": "string",
+              "const": "whisper-large-v3-turbo"
+            }
+          ],
+          "default": "whisper-large-v3"
+        },
+        "language": {
+          "type": "string",
+          "description": "Language code for Whisper (e.g. \"ru\", \"en\", or \"auto\").",
+          "default": "auto"
+        },
+        "holdSpaceToTalk": {
+          "type": "boolean",
+          "description": "Hold Space key to start/stop voice recording.",
+          "default": true
+        },
+        "chunkIntervalMs": {
+          "type": "number",
+          "minimum": 500,
+          "maximum": 10000,
+          "default": 1500
+        }
+      }
+    },
+    "search": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable built-in web_search and web_fetch tools.",
+          "default": true
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "tavily"
+            },
+            {
+              "type": "string",
+              "const": "brave"
+            },
+            {
+              "type": "string",
+              "const": "exa"
+            },
+            {
+              "type": "string",
+              "const": "serper"
+            },
+            {
+              "type": "string",
+              "const": "perplexity"
+            },
+            {
+              "type": "string",
+              "const": "firecrawl"
+            },
+            {
+              "type": "string",
+              "const": "jina"
+            },
+            {
+              "type": "string",
+              "const": "linkup"
+            },
+            {
+              "type": "string",
+              "const": "serpapi"
+            },
+            {
+              "type": "string",
+              "const": "google_cse"
+            },
+            {
+              "type": "string",
+              "const": "duckduckgo"
+            },
+            {
+              "type": "string",
+              "const": "searxng"
+            }
+          ]
+        },
+        "apiKeys": {
+          "type": "object",
+          "patternProperties": {
+            "^.*$": {
+              "type": "string"
+            }
+          },
+          "description": "API keys keyed by search provider ID."
+        },
+        "searxngUrl": {
+          "type": "string",
+          "description": "Base URL for self-hosted SearXNG instance."
+        },
+        "googleCseId": {
+          "type": "string",
+          "description": "Google Custom Search Engine ID (cx)."
+        }
+      }
+    },
+    "onboardingCompleted": {
+      "type": "boolean",
+      "default": false
+    },
     "codemode": {
       "type": "object",
       "properties": {

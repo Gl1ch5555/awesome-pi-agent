@@ -197,6 +197,35 @@ async function readClipboardImageViaNativeClipboard(): Promise<ClipboardImage | 
 	return { bytes, mimeType: detectSupportedImageMimeType(bytes) ?? "application/octet-stream" };
 }
 
+async function readClipboardImageViaNativePowerShell(): Promise<ClipboardImage | null> {
+	const tmpFile = join(tmpdir(), `pi-win-clip-${randomUUID()}.png`);
+	try {
+		const psQuotedPath = tmpFile.replaceAll("'", "''");
+		const psScript = [
+			"Add-Type -AssemblyName System.Windows.Forms",
+			"Add-Type -AssemblyName System.Drawing",
+			`$path = '${psQuotedPath}'`,
+			"$img = [System.Windows.Forms.Clipboard]::GetImage()",
+			"if ($img) { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output 'ok' } else { Write-Output 'empty' }",
+		].join("; ");
+		const result = await runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
+			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
+		});
+		if (!result || result.toString("utf-8").trim() !== "ok") return null;
+		const bytes = readFileSync(tmpFile);
+		if (bytes.length === 0) return null;
+		return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+	} catch {
+		return null;
+	} finally {
+		try {
+			unlinkSync(tmpFile);
+		} catch {
+			// Ignore cleanup errors.
+		}
+	}
+}
+
 export async function readClipboardImage(options?: {
 	env?: NodeJS.ProcessEnv;
 	platform?: NodeJS.Platform;
@@ -219,6 +248,9 @@ export async function readClipboardImage(options?: {
 		// Preserve Linux's empty/unavailable distinction if Windows has no image.
 		if (!image && wsl) image = (await readClipboardImageViaPowerShell()) ?? image;
 		if (image === undefined) image = await readClipboardImageViaNativeClipboard();
+	} else if (platform === "win32") {
+		image = await readClipboardImageViaNativeClipboard();
+		if (!image) image = await readClipboardImageViaNativePowerShell();
 	} else {
 		image = await readClipboardImageViaNativeClipboard();
 	}

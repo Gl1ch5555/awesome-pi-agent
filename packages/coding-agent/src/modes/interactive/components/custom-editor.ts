@@ -1,4 +1,14 @@
-import { Editor, type EditorOptions, type EditorTheme, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	Editor,
+	type EditorOptions,
+	type EditorTheme,
+	isKeyRelease,
+	isKeyRepeat,
+	isKittyProtocolActive,
+	matchesKey,
+	type TUI,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import type { StatusIndicator } from "./status-indicator.ts";
 
@@ -23,10 +33,78 @@ export class CustomEditor extends Editor {
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
 	public onExtensionShortcut?: (data: string) => boolean;
 
+	// Hold-Space voice dictation state
+	public voiceHoldEnabled = false;
+	public onVoiceHoldStart?: () => void;
+	public onVoiceHoldStop?: () => void;
+	public onVoiceHoldCancel?: () => void;
+	private voiceState: "idle" | "arming" | "recording" = "idle";
+	private voiceArmingTimer: ReturnType<typeof setTimeout> | undefined;
+	private voiceReleaseWatchdog: ReturnType<typeof setTimeout> | undefined;
+	private voiceArmingInsertedSpace = false;
+
 	constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, options?: CustomEditorOptions) {
 		super(tui, theme, options);
 		this.keybindings = keybindings;
 		this.embedWorkingStatus = options?.embedWorkingStatus ?? false;
+		this.wantsKeyRelease = true;
+	}
+
+	setVoiceHoldEnabled(enabled: boolean): void {
+		this.voiceHoldEnabled = enabled;
+		if (!enabled) {
+			this.resetVoiceState();
+		}
+	}
+
+	private clearVoiceTimers(): void {
+		if (this.voiceArmingTimer) {
+			clearTimeout(this.voiceArmingTimer);
+			this.voiceArmingTimer = undefined;
+		}
+		if (this.voiceReleaseWatchdog) {
+			clearTimeout(this.voiceReleaseWatchdog);
+			this.voiceReleaseWatchdog = undefined;
+		}
+	}
+
+	resetVoiceState(): void {
+		this.clearVoiceTimers();
+		this.voiceState = "idle";
+		this.voiceArmingInsertedSpace = false;
+	}
+
+	private removeArmingSpaceIfPresent(): void {
+		if (!this.voiceArmingInsertedSpace) return;
+		this.voiceArmingInsertedSpace = false;
+		const cursor = this.getCursor();
+		const lines = this.getLines();
+		const line = lines[cursor.line] ?? "";
+		if (cursor.col > 0 && line[cursor.col - 1] === " ") {
+			super.handleInput("\x7f"); // Backspace
+		}
+	}
+
+	private startVoiceRecording(): void {
+		this.clearVoiceTimers();
+		this.removeArmingSpaceIfPresent();
+		this.voiceState = "recording";
+		if (!isKittyProtocolActive()) {
+			this.bumpVoiceReleaseWatchdog();
+		}
+		this.onVoiceHoldStart?.();
+	}
+
+	private bumpVoiceReleaseWatchdog(): void {
+		if (this.voiceReleaseWatchdog) {
+			clearTimeout(this.voiceReleaseWatchdog);
+		}
+		this.voiceReleaseWatchdog = setTimeout(() => {
+			if (this.voiceState === "recording") {
+				this.resetVoiceState();
+				this.onVoiceHoldStop?.();
+			}
+		}, 450);
 	}
 
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void {
@@ -86,6 +164,63 @@ export class CustomEditor extends Editor {
 	}
 
 	handleInput(data: string): void {
+		// Always consume key release events cleanly; stop voice recording if Space was released.
+		if (isKeyRelease(data)) {
+			if (matchesKey(data, "space")) {
+				if (this.voiceState === "arming") {
+					this.resetVoiceState();
+				} else if (this.voiceState === "recording") {
+					this.resetVoiceState();
+					this.onVoiceHoldStop?.();
+				}
+			}
+			return;
+		}
+
+		const isSpaceInput = data === " " || matchesKey(data, "space");
+		const isSpaceRepeat = isSpaceInput && isKeyRepeat(data);
+
+		if (this.voiceState === "recording") {
+			if (isSpaceInput || isSpaceRepeat) {
+				if (!isKittyProtocolActive()) {
+					this.bumpVoiceReleaseWatchdog();
+				}
+				return;
+			}
+			if (this.keybindings.matches(data, "app.interrupt")) {
+				this.resetVoiceState();
+				this.onVoiceHoldCancel?.();
+				return;
+			}
+		}
+
+		if (this.voiceHoldEnabled && !this.isShowingAutocomplete()) {
+			if (isSpaceInput) {
+				if (this.voiceState === "arming") {
+					this.startVoiceRecording();
+					return;
+				}
+				if (this.voiceState === "idle" && !isSpaceRepeat) {
+					this.voiceState = "arming";
+					this.voiceArmingInsertedSpace = true;
+					super.handleInput(data);
+					const delay = isKittyProtocolActive() ? 300 : 650;
+					this.voiceArmingTimer = setTimeout(() => {
+						if (this.voiceState !== "arming") return;
+						if (isKittyProtocolActive()) {
+							this.startVoiceRecording();
+						} else {
+							this.voiceState = "idle";
+							this.voiceArmingInsertedSpace = false;
+						}
+					}, delay);
+					return;
+				}
+			} else if (this.voiceState === "arming") {
+				this.resetVoiceState();
+			}
+		}
+
 		// Check extension-registered shortcuts first
 		if (this.onExtensionShortcut?.(data)) {
 			return;

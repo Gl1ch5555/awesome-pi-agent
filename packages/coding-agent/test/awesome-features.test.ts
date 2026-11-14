@@ -1,0 +1,138 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	deleteCustomProvider,
+	fetchProviderModelsCatalog,
+	listCustomProviders,
+	upsertCustomProvider,
+} from "../src/core/custom-providers.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { createWebSearchToolDefinition, SEARCH_PROVIDERS } from "../src/core/tools/web-search.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+import {
+	extractMultipleImagePathsFromText,
+	resolvePromptImages,
+	tryResolveImagePath,
+} from "../src/utils/image-attachments.ts";
+
+// 1x1 transparent PNG
+const TINY_PNG = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+	"base64",
+);
+
+describe("awesome-pi-agent customizations", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "awesome-pi-test-"));
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("registers graphite theme as a built-in theme", () => {
+		initTheme("graphite");
+		expect(theme.name).toBe("graphite");
+		expect(theme.appearance).toBe("dark");
+	});
+
+	it("binds app.clipboard.pasteImage strictly to ctrl+v on all platforms", () => {
+		const kb = new KeybindingsManager();
+		expect(kb.getKeys("app.clipboard.pasteImage")).toEqual(["ctrl+v"]);
+	});
+
+	it("detects pasted image paths and resolves (image) markers into ImageContent", async () => {
+		const imgPath = join(tempDir, "shot.png");
+		writeFileSync(imgPath, TINY_PNG);
+
+		expect(tryResolveImagePath(`"${imgPath}"`, tempDir)).toBe(imgPath);
+		expect(extractMultipleImagePathsFromText(imgPath, tempDir)).toEqual([imgPath]);
+
+		const res1 = await resolvePromptImages("look at (image)", [{ path: imgPath }], {
+			cwd: tempDir,
+			autoResizeImages: false,
+			blockImages: false,
+		});
+		expect(res1.text).toBe("look at (image)");
+		expect(res1.images).toHaveLength(1);
+		expect(res1.images[0]?.mimeType).toBe("image/png");
+
+		const res2 = await resolvePromptImages(`check "${imgPath}" please`, [], {
+			cwd: tempDir,
+			autoResizeImages: false,
+			blockImages: false,
+		});
+		expect(res2.text).toBe("check (image) please");
+		expect(res2.images).toHaveLength(1);
+	});
+
+	it("manages custom providers in models.json and parses /v1/models", async () => {
+		const modelsPath = join(tempDir, "models.json");
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					data: [
+						{ id: "deepseek-r1", context_length: 64000 },
+						{ id: "gpt-4o", context_length: 128000 },
+					],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			),
+		);
+
+		const models = await fetchProviderModelsCatalog("https://example.com/v1", "sk-test");
+		expect(fetchMock).toHaveBeenCalledOnce();
+		expect(models.map((m) => m.id)).toEqual(["deepseek-r1", "gpt-4o"]);
+
+		upsertCustomProvider(
+			{
+				id: "my-proxy",
+				baseUrl: "https://example.com/v1",
+				apiKey: "sk-test",
+				models,
+			},
+			modelsPath,
+		);
+
+		const list = listCustomProviders(modelsPath);
+		expect(list).toHaveLength(1);
+		expect(list[0]?.id).toBe("my-proxy");
+		expect(list[0]?.models).toHaveLength(2);
+
+		deleteCustomProvider("my-proxy", modelsPath);
+		expect(listCustomProviders(modelsPath)).toHaveLength(0);
+	});
+
+	it("provides Tavily plus 11 other web search providers and executes web_search", async () => {
+		expect(SEARCH_PROVIDERS.length).toBeGreaterThanOrEqual(11);
+		expect(SEARCH_PROVIDERS.map((p) => p.id)).toContain("tavily");
+		expect(SEARCH_PROVIDERS.map((p) => p.id)).toContain("duckduckgo");
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+			new Response(
+				JSON.stringify({
+					answer: "Pi coding agent",
+					results: [{ title: "Pi", url: "https://pi.dev", content: "Minimal agent harness" }],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			),
+		);
+
+		const tool = createWebSearchToolDefinition({
+			getSettings: () => ({
+				enabled: true,
+				provider: "tavily",
+				apiKeys: { tavily: "tvly-test" },
+			}),
+		});
+		const out = await tool.execute("call-1", { query: "pi coding agent" }, undefined, undefined, {} as never);
+		expect(out.details?.provider).toBe("tavily");
+		expect(out.details?.resultCount).toBe(1);
+		expect((out.content[0] as { text: string }).text).toContain("https://pi.dev");
+	});
+});

@@ -141,6 +141,72 @@ const MarkdownSettingsSchema = Type.Object({
 	),
 });
 
+const VoiceSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Enable built-in voice input (hold Space to dictate).",
+			default: SETTINGS_DEFAULTS.voice.enabled,
+		}),
+	),
+	groqApiKey: Type.Optional(Type.String({ description: "Groq API key for Whisper live transcription." })),
+	model: Type.Optional(
+		Type.Union([Type.Literal("whisper-large-v3"), Type.Literal("whisper-large-v3-turbo")], {
+			default: SETTINGS_DEFAULTS.voice.model,
+		}),
+	),
+	language: Type.Optional(
+		Type.String({
+			description: 'Language code for Whisper (e.g. "ru", "en", or "auto").',
+			default: SETTINGS_DEFAULTS.voice.language,
+		}),
+	),
+	holdSpaceToTalk: Type.Optional(
+		Type.Boolean({
+			description: "Hold Space key to start/stop voice recording.",
+			default: SETTINGS_DEFAULTS.voice.holdSpaceToTalk,
+		}),
+	),
+	chunkIntervalMs: Type.Optional(
+		Type.Number({
+			minimum: 500,
+			maximum: 10000,
+			default: SETTINGS_DEFAULTS.voice.chunkIntervalMs,
+		}),
+	),
+});
+
+const SearchProviderSchema = Type.Union([
+	Type.Literal("tavily"),
+	Type.Literal("brave"),
+	Type.Literal("exa"),
+	Type.Literal("serper"),
+	Type.Literal("perplexity"),
+	Type.Literal("firecrawl"),
+	Type.Literal("jina"),
+	Type.Literal("linkup"),
+	Type.Literal("serpapi"),
+	Type.Literal("google_cse"),
+	Type.Literal("duckduckgo"),
+	Type.Literal("searxng"),
+]);
+
+const SearchSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Enable built-in web_search and web_fetch tools.",
+			default: SETTINGS_DEFAULTS.search.enabled,
+		}),
+	),
+	provider: Type.Optional(SearchProviderSchema),
+	apiKeys: Type.Optional(
+		Type.Record(Type.String(), Type.String(), {
+			description: "API keys keyed by search provider ID.",
+		}),
+	),
+	searxngUrl: Type.Optional(Type.String({ description: "Base URL for self-hosted SearXNG instance." })),
+	googleCseId: Type.Optional(Type.String({ description: "Google Custom Search Engine ID (cx)." })),
+});
+
 const WarningSettingsSchema = Type.Object({
 	anthropicExtraUsage: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.warnings.anthropicExtraUsage })),
 });
@@ -397,6 +463,9 @@ export const SettingsSchema = Type.Object(
 		),
 		markdown: Type.Optional(MarkdownSettingsSchema),
 		warnings: Type.Optional(WarningSettingsSchema),
+		voice: Type.Optional(VoiceSettingsSchema),
+		search: Type.Optional(SearchSettingsSchema),
+		onboardingCompleted: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.onboardingCompleted })),
 		codemode: Type.Optional(CodemodeSettingsSchema),
 		sessionDir: Type.Optional(
 			Type.String({
@@ -478,6 +547,10 @@ export interface ThinkingBudgetsSettings extends Static<typeof ThinkingBudgetsSe
 export type MermaidRenderingMode = NonNullable<Static<typeof MarkdownSettingsSchema>["mermaid"]>;
 export interface MarkdownSettings extends Static<typeof MarkdownSettingsSchema> {}
 export interface WarningSettings extends Static<typeof WarningSettingsSchema> {}
+export type VoiceModel = NonNullable<Static<typeof VoiceSettingsSchema>["model"]>;
+export interface VoiceSettings extends Static<typeof VoiceSettingsSchema> {}
+export type SearchProviderId = Static<typeof SearchProviderSchema>;
+export interface SearchSettings extends Static<typeof SearchSettingsSchema> {}
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}
 export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust"]>;

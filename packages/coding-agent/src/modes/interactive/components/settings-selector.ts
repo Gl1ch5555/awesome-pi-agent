@@ -21,8 +21,11 @@ import {
 	type FullscreenExitOutput,
 	type MermaidRenderingMode,
 	type QuietStartup,
+	type SearchProviderId,
+	type SearchSettings,
 	type SessionShareDestination,
 	type TuiMode,
+	type VoiceSettings,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
 import {
@@ -35,6 +38,7 @@ import {
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyDisplayText } from "./keybinding-hints.ts";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
+import { SearchSettingsSubmenu, VoiceSettingsSubmenu } from "./voice-search-settings.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };
 
@@ -101,6 +105,8 @@ export interface SettingsConfig {
 	fullscreenCopyOnSelect: boolean;
 	fullscreenWheelScrollLines: WheelScrollLines;
 	warnings: WarningSettings;
+	voice?: VoiceSettings;
+	search?: SearchSettings;
 }
 
 export interface SettingsCallbacks {
@@ -141,6 +147,11 @@ export interface SettingsCallbacks {
 	onFullscreenCopyOnSelectChange: (enabled: boolean) => void;
 	onFullscreenWheelScrollLinesChange: (lines: WheelScrollLines) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
+	onVoiceSettingsChange?: (patch: Partial<VoiceSettings>) => void;
+	onSearchProviderChange?: (provider: SearchProviderId) => void;
+	onSearchApiKeyChange?: (provider: string, apiKey: string | undefined) => void;
+	onSearchExtrasChange?: (extras: { enabled?: boolean; searxngUrl?: string; googleCseId?: string }) => void;
+	onOpenProviders?: () => void;
 	onCancel: () => void;
 }
 
@@ -758,6 +769,54 @@ export class SettingsSelectorComponent extends Container {
 				],
 			},
 			{
+				id: "voice-input",
+				label: "Voice input (Groq Whisper)",
+				description: "Hold Space to record and stream live transcription",
+				currentValue: config.voice?.enabled === false ? "off" : "on",
+				submenu: (_currentValue, done) =>
+					new VoiceSettingsSubmenu(
+						config.voice ?? { enabled: true, model: "whisper-large-v3", language: "auto", holdSpaceToTalk: true },
+						(patch) => {
+							if (config.voice) Object.assign(config.voice, patch);
+							callbacks.onVoiceSettingsChange?.(patch);
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "web-search",
+				label: "Web search & fetch",
+				description: "Configure Tavily + 11 search providers and API keys",
+				currentValue: config.search?.provider ?? "tavily",
+				submenu: (_currentValue, done) =>
+					new SearchSettingsSubmenu(config.search ?? { enabled: true, provider: "tavily" }, {
+						onProviderChange: (provider) => {
+							if (config.search) config.search.provider = provider;
+							callbacks.onSearchProviderChange?.(provider);
+						},
+						onApiKeyChange: (provider, apiKey) => {
+							if (config.search) {
+								config.search.apiKeys ??= {};
+								if (apiKey) config.search.apiKeys[provider] = apiKey;
+								else delete config.search.apiKeys[provider];
+							}
+							callbacks.onSearchApiKeyChange?.(provider, apiKey);
+						},
+						onExtrasChange: (extras) => {
+							if (config.search) Object.assign(config.search, extras);
+							callbacks.onSearchExtrasChange?.(extras);
+						},
+						onDone: () => done(),
+					}),
+			},
+			{
+				id: "custom-providers",
+				label: "Custom LLM providers (/providers)",
+				description: "Add API URL + key, fetch /v1/models, and pick models",
+				currentValue: "manage",
+				values: ["open"],
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -992,6 +1051,10 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "theme":
 						callbacks.onThemeChange(newValue);
+						break;
+					case "custom-providers":
+						callbacks.onCancel();
+						callbacks.onOpenProviders?.();
 						break;
 				}
 			},
