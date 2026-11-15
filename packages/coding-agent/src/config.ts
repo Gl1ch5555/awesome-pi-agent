@@ -626,13 +626,13 @@ export function getShareViewerUrl(gistId: string): string {
 // User Config Paths (~/.pi/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.pi/agent/) */
+/** Get the agent config directory (e.g., ~/.pi-awesome/agent/) */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
-	return join(homedir(), CONFIG_DIR_NAME, "agent");
+	return join(homedir(), ".pi-awesome", "agent");
 }
 
 /** Get path to user's custom themes directory */
