@@ -4,9 +4,27 @@ import { dirname, join, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
-import { readSyncState, syncBidirectional } from "../../core/cloud-sync.ts";
+import {
+	DEFAULT_CLOUD_SYNC_URL,
+	readSyncState,
+	syncAuthenticate,
+	syncBidirectional,
+	syncLogout,
+	syncPull,
+	syncPush,
+	writeSyncState,
+} from "../../core/cloud-sync.ts";
+import {
+	deleteCustomProvider,
+	fetchProviderModelsCatalog,
+	inferModelMetadata,
+	listCustomProviders,
+	upsertCustomProvider,
+} from "../../core/custom-providers.ts";
+import { clearMemoryTarget, MEMORY_CHAR_LIMITS, readMemorySnapshot } from "../../core/memory-store.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { getAvailableThemes } from "../interactive/theme/theme.ts";
 import { PI_WEB_ICON_SVG, PI_WEB_MANIFEST, PI_WEB_SW_JS, renderWebUiHtml } from "./web-ui-html.ts";
 
 export interface PiWebServerOptions {
@@ -445,6 +463,66 @@ export class PiWebServer {
 				this.sendJson(res, 200, { ok: true });
 				return;
 			}
+			if (text === "/settings" || text === "/theme" || text === "/providers" || text === "/sync" || text === "/memory") {
+				const tab =
+					text === "/providers"
+						? "providers"
+						: text === "/sync"
+							? "sync"
+							: text === "/memory"
+								? "memory"
+								: "general";
+				this.broadcastRaw({ type: "open_settings", tab });
+				this.sendJson(res, 200, { ok: true, openSettings: tab });
+				return;
+			}
+			if (text.startsWith("/theme ")) {
+				const themeName = text.slice("/theme ".length).trim();
+				if (themeName) {
+					this.session.settingsManager.setTheme(themeName);
+					await this.session.settingsManager.flush();
+					this.onStateChange?.();
+					this.triggerBackgroundSync();
+					this.broadcastRaw({ type: "session_changed" });
+					this.broadcastRaw({ type: "system_notice", text: `Тема: ${themeName}` });
+				}
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (text === "/sync push" || text === "/sync pull") {
+				const mode = text.split(" ")[1];
+				try {
+					const agentDir = this.session.settingsManager.getAgentDir();
+					if (mode === "push") {
+						await this.session.settingsManager.flush();
+						const r = await syncPush(agentDir);
+						this.broadcastRaw({
+							type: "system_notice",
+							text: `Cloud sync: pushed (${r.skillFiles} skills, ${r.extensionFiles} plugins)`,
+						});
+					} else {
+						const r = await syncPull(agentDir);
+						if (r.hasData && !this.session.isStreaming && !this.session.isCompacting) {
+							await this.session.settingsManager.reload();
+							await this.session.modelRuntime.refresh();
+							await this.session.reload();
+							this.onStateChange?.();
+							this.broadcastRaw({ type: "session_changed" });
+						}
+						this.broadcastRaw({
+							type: "system_notice",
+							text: r.hasData ? `Cloud sync: pulled (${r.skillFiles} skills, ${r.extensionFiles} plugins)` : "Cloud sync: нет данных",
+						});
+					}
+				} catch (err) {
+					this.broadcastRaw({
+						type: "system_notice",
+						text: err instanceof Error ? err.message : String(err),
+					});
+				}
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
 			if (text.startsWith("/model ")) {
 				const q = text.slice("/model ".length).trim().toLowerCase();
 				const found = this.session.modelRuntime
@@ -670,6 +748,278 @@ export class PiWebServer {
 			this.onStateChange?.();
 			this.triggerBackgroundSync();
 			this.sendJson(res, 200, { ok: true });
+			return;
+		}
+
+		if (req.method === "GET" && pathname === "/api/settings") {
+			const sm = this.session.settingsManager;
+			const agentDir = sm.getAgentDir();
+			const cwd = this.session.sessionManager.getCwd();
+			const modelsPath = join(agentDir, "models.json");
+			const syncState = readSyncState(agentDir);
+			const voice = sm.getVoiceSettings();
+			const memSettings = sm.getMemorySettings();
+			const memSnap = readMemorySnapshot({ cwd, agentDir });
+			const providers = listCustomProviders(modelsPath).map((p) => ({
+				id: p.id,
+				baseUrl: p.baseUrl,
+				api: p.api,
+				modelIds: p.models.map((m) => m.id),
+				hasApiKey: Boolean(p.apiKey),
+			}));
+			this.sendJson(res, 200, {
+				theme: sm.getTheme() || "graphite",
+				availableThemes: getAvailableThemes(),
+				themeAccent: sm.getThemeAccent(),
+				availableAccents: ["default", "slate", "sage", "amber", "coral", "cyan", "violet", "rose", "mono"],
+				tuiStyle: sm.getTuiStyle(),
+				availableTuiStyles: ["native", "rounded", "compact", "opentui", "sageveil"],
+				codemodeEnabled: sm.getCodemodeEnabled(),
+				hideThinkingBlock: sm.getHideThinkingBlock(),
+				quietStartup: sm.getQuietStartup(),
+				autoUpdate: sm.getAutoUpdate(),
+				voice: {
+					enabled: voice.enabled !== false,
+					holdSpaceToTalk: voice.holdSpaceToTalk !== false,
+				},
+				memory: {
+					enabled: memSettings.reviewEnabled !== false,
+					nudgeInterval: memSettings.nudgeInterval ?? 10,
+					skillReviewMinToolCalls: memSettings.skillReviewMinToolCalls ?? 3,
+					limits: MEMORY_CHAR_LIMITS,
+					snapshot: memSnap,
+				},
+				sync: syncState
+					? {
+							signedIn: true,
+							user: syncState.user,
+							serverUrl: syncState.serverUrl,
+							autoSync: syncState.autoSync,
+							lastSyncUpdated: syncState.lastSyncUpdated,
+						}
+					: {
+							signedIn: false,
+							serverUrl: DEFAULT_CLOUD_SYNC_URL,
+							autoSync: true,
+							lastSyncUpdated: 0,
+						},
+				providers,
+			});
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/settings") {
+			const body = await this.readJsonBody(req);
+			const sm = this.session.settingsManager;
+			if (typeof body.theme === "string" && body.theme.trim()) {
+				sm.setTheme(body.theme.trim());
+			}
+			if (typeof body.themeAccent === "string") {
+				sm.setThemeAccent(body.themeAccent as any);
+			}
+			if (typeof body.tuiStyle === "string") {
+				sm.setTuiStyle(body.tuiStyle as any);
+			}
+			if (typeof body.hideThinkingBlock === "boolean") {
+				sm.setHideThinkingBlock(body.hideThinkingBlock);
+			}
+			if (typeof body.quietStartup === "boolean") {
+				sm.setQuietStartup(body.quietStartup);
+			}
+			if (typeof body.autoUpdate === "string") {
+				sm.setAutoUpdate(body.autoUpdate as any);
+			}
+			if (body.voice && typeof body.voice === "object") {
+				sm.setVoiceSettings(body.voice as any);
+			}
+			if (body.memory && typeof body.memory === "object") {
+				sm.setMemorySettings(body.memory as any);
+			}
+			if (typeof body.codemodeEnabled === "boolean") {
+				sm.setCodemodeEnabled(body.codemodeEnabled);
+				const active = this.session.getActiveToolNames();
+				const next = body.codemodeEnabled
+					? active.includes("codemode")
+						? active
+						: [...active, "codemode"]
+					: active.filter((name) => name !== "codemode");
+				this.session.setActiveToolsByName(next);
+			}
+			await sm.flush();
+			this.onStateChange?.();
+			this.triggerBackgroundSync();
+			this.broadcastRaw({ type: "session_changed" });
+			this.sendJson(res, 200, { ok: true });
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/sync") {
+			const body = await this.readJsonBody(req);
+			const action = typeof body.action === "string" ? body.action : "";
+			const agentDir = this.session.settingsManager.getAgentDir();
+			try {
+				if (action === "login" || action === "register") {
+					const serverUrl = typeof body.serverUrl === "string" ? body.serverUrl : DEFAULT_CLOUD_SYNC_URL;
+					const user = typeof body.user === "string" ? body.user : "";
+					const pass = typeof body.pass === "string" ? body.pass : "";
+					if (!user.trim() || !pass) {
+						this.sendJson(res, 400, { error: "Введите логин и пароль" });
+						return;
+					}
+					await syncAuthenticate(action, serverUrl, user, pass, agentDir);
+					if (action === "login") {
+						const pull = await syncPull(agentDir);
+						if (!pull.hasData) {
+							await this.session.settingsManager.flush();
+							await syncPush(agentDir);
+						} else if (!this.session.isStreaming && !this.session.isCompacting) {
+							await this.session.settingsManager.reload();
+							await this.session.modelRuntime.refresh();
+							await this.session.reload();
+						}
+					} else {
+						await this.session.settingsManager.flush();
+						await syncPush(agentDir);
+					}
+					this.onStateChange?.();
+					this.broadcastRaw({ type: "session_changed" });
+					this.sendJson(res, 200, { ok: true });
+					return;
+				}
+				if (action === "logout") {
+					await syncLogout(agentDir);
+					this.sendJson(res, 200, { ok: true });
+					return;
+				}
+				if (action === "push") {
+					await this.session.settingsManager.flush();
+					const r = await syncPush(agentDir);
+					this.sendJson(res, 200, { ok: true, ...r });
+					return;
+				}
+				if (action === "pull") {
+					const r = await syncPull(agentDir);
+					if (r.hasData && !this.session.isStreaming && !this.session.isCompacting) {
+						await this.session.settingsManager.reload();
+						await this.session.modelRuntime.refresh();
+						await this.session.reload();
+						this.onStateChange?.();
+						this.broadcastRaw({ type: "session_changed" });
+					}
+					this.sendJson(res, 200, { ok: true, ...r });
+					return;
+				}
+				if (action === "toggleAutoSync") {
+					const state = readSyncState(agentDir);
+					if (!state) {
+						this.sendJson(res, 400, { error: "Не выполнен вход в Cloud Sync" });
+						return;
+					}
+					const nextAuto = typeof body.autoSync === "boolean" ? body.autoSync : !state.autoSync;
+					writeSyncState({ ...state, autoSync: nextAuto }, agentDir);
+					this.sendJson(res, 200, { ok: true, autoSync: nextAuto });
+					return;
+				}
+				this.sendJson(res, 400, { error: "Unknown sync action" });
+			} catch (err) {
+				this.sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+			}
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/providers") {
+			const body = await this.readJsonBody(req);
+			const action = typeof body.action === "string" ? body.action : "";
+			const agentDir = this.session.settingsManager.getAgentDir();
+			const modelsPath = join(agentDir, "models.json");
+			try {
+				if (action === "fetchModels") {
+					const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+					const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+					const api = typeof body.api === "string" ? body.api : "openai-completions";
+					if (!baseUrl) {
+						this.sendJson(res, 400, { error: "Укажите Base URL" });
+						return;
+					}
+					const models = await fetchProviderModelsCatalog(baseUrl, apiKey, api as any);
+					this.sendJson(res, 200, { ok: true, models });
+					return;
+				}
+				if (action === "save") {
+					const id = typeof body.id === "string" ? body.id.trim() : "";
+					const baseUrl = typeof body.baseUrl === "string" ? body.baseUrl.trim() : "";
+					const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+					const api = typeof body.api === "string" ? body.api : "openai-completions";
+					const rawModels = Array.isArray(body.models) ? body.models : [];
+					if (!id || !baseUrl || rawModels.length === 0) {
+						this.sendJson(res, 400, { error: "Укажите имя провайдера, URL и хотя бы одну модель" });
+						return;
+					}
+					const models = rawModels.map((m: any) =>
+						typeof m === "string" ? inferModelMetadata({ id: m }) : inferModelMetadata(m),
+					);
+					upsertCustomProvider({ id, baseUrl, apiKey, api: api as any, models }, modelsPath);
+					await this.session.modelRuntime.refresh();
+					if (!this.session.model && models[0]) {
+						const first = this.session.modelRuntime.getModel(id, models[0].id);
+						if (first) await this.session.setModel(first, { persist: true });
+					}
+					await this.session.settingsManager.flush();
+					this.onStateChange?.();
+					this.triggerBackgroundSync();
+					this.broadcastRaw({ type: "session_changed" });
+					this.sendJson(res, 200, { ok: true });
+					return;
+				}
+				if (action === "delete") {
+					const id = typeof body.id === "string" ? body.id.trim() : "";
+					if (!id) {
+						this.sendJson(res, 400, { error: "Missing provider id" });
+						return;
+					}
+					deleteCustomProvider(id, modelsPath);
+					await this.session.modelRuntime.refresh();
+					this.onStateChange?.();
+					this.triggerBackgroundSync();
+					this.broadcastRaw({ type: "session_changed" });
+					this.sendJson(res, 200, { ok: true });
+					return;
+				}
+				this.sendJson(res, 400, { error: "Unknown providers action" });
+			} catch (err) {
+				this.sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+			}
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/memory") {
+			const body = await this.readJsonBody(req);
+			const action = typeof body.action === "string" ? body.action : "";
+			const agentDir = this.session.settingsManager.getAgentDir();
+			const cwd = this.session.sessionManager.getCwd();
+			try {
+				if (action === "clear") {
+					const target = body.target;
+					if (target !== "project" && target !== "memory" && target !== "user") {
+						this.sendJson(res, 400, { error: "Invalid memory target" });
+						return;
+					}
+					const resClear = clearMemoryTarget(target, { cwd, agentDir });
+					this.triggerBackgroundSync();
+					this.sendJson(res, 200, { ok: true, ...resClear });
+					return;
+				}
+				if (action === "review") {
+					const focus = typeof body.focus === "string" && body.focus.trim() ? body.focus.trim() : undefined;
+					const resReview = await this.session.runMemoryReview(focus);
+					if (resReview.saved) this.triggerBackgroundSync();
+					this.sendJson(res, 200, { ok: true, ...resReview });
+					return;
+				}
+				this.sendJson(res, 400, { error: "Unknown memory action" });
+			} catch (err) {
+				this.sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+			}
 			return;
 		}
 
