@@ -140,6 +140,7 @@ import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { LiveVoiceSession } from "../../core/voice/groq-whisper.ts";
 import { warmupRecorderBackend } from "../../core/voice/voice-recorder.ts";
 import { addMcpServerConfig } from "../../extensions/mcp/config.ts";
+import { PiWebServer } from "../web/web-server.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -474,6 +475,10 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 	/** TUI layout mode. */
 	tuiMode?: TuiMode;
+	/** Start local Web UI server alongside TUI. */
+	web?: boolean;
+	/** Preferred port for local Web UI server. */
+	webPort?: number;
 	/** Initial interactive theme setting for this invocation. */
 	initialThemeSetting?: string;
 	/** Terminal implementation. Defaults to the current process terminal. */
@@ -519,6 +524,7 @@ export class InteractiveMode {
 	private pendingImageAttachments: PendingImageAttachment[] = [];
 	private activeVoiceSession: LiveVoiceSession | undefined = undefined;
 	private voiceIndicator: VoiceIndicatorComponent | undefined = undefined;
+	private webServer: PiWebServer | undefined = undefined;
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
@@ -1277,6 +1283,11 @@ export class InteractiveMode {
 					this.updateTerminalTitle();
 				}
 			});
+
+		const webSettings = this.settingsManager.getWebUiSettings();
+		if (this.options.web || webSettings.enabled) {
+			void this.startWebUiServer(this.options.webPort ?? webSettings.port, webSettings.host);
+		}
 
 		// Check tmux keyboard setup asynchronously
 		this.checkTmuxKeyboardSetup().then((warning) => {
@@ -3477,6 +3488,12 @@ export class InteractiveMode {
 				await this.handleSyncCommand(arg || undefined);
 				return;
 			}
+			if (text === "/web" || text.startsWith("/web ")) {
+				const arg = text.slice("/web".length).trim();
+				this.editor.setText("");
+				await this.handleWebCommand(arg || undefined);
+				return;
+			}
 			if (text === "/update") {
 				this.editor.setText("");
 				await this.handleUpdateCommand();
@@ -4664,6 +4681,8 @@ export class InteractiveMode {
 		await this.activeVoiceSession?.cancel().catch(() => {});
 		this.activeVoiceSession = undefined;
 		this.voiceIndicator = undefined;
+		await this.webServer?.stop().catch(() => {});
+		this.webServer = undefined;
 		// Keep signal handlers registered until terminal cleanup has completed.
 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 		// dispatch and re-sends the signal if only its own listeners remain.
@@ -5352,6 +5371,7 @@ export class InteractiveMode {
 					search: this.settingsManager.getSearchSettings(),
 					memory: this.settingsManager.getMemorySettings(),
 					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
+					webUiEnabled: this.settingsManager.getWebUiSettings().enabled,
 					tuiStyle: this.settingsManager.getTuiStyle(),
 					themeAccent: this.settingsManager.getThemeAccent(),
 					autoUpdate: this.settingsManager.getAutoUpdate(),
@@ -5572,6 +5592,16 @@ export class InteractiveMode {
 						this.showStatus(`Experimental Code Mode: ${enabled ? "on" : "off"}`);
 						this.triggerAutoSyncPush();
 					},
+					onWebUiEnabledChange: (enabled) => {
+						this.settingsManager.setWebUiSettings({ enabled });
+						if (enabled) {
+							const cfg = this.settingsManager.getWebUiSettings();
+							void this.startWebUiServer(this.options.webPort ?? cfg.port, cfg.host);
+						} else {
+							void this.stopWebUiServer();
+						}
+						this.triggerAutoSyncPush();
+					},
 					onTuiStyleChange: (style) => {
 						this.settingsManager.setTuiStyle(style);
 						this.defaultEditor.setTuiStyle(style);
@@ -5603,6 +5633,66 @@ export class InteractiveMode {
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});
+	}
+
+	private async startWebUiServer(port?: number, host?: string): Promise<void> {
+		if (this.webServer?.isRunning()) {
+			const url = this.webServer.getUrl();
+			if (url) this.showStatus(`Web UI running: ${url}`);
+			return;
+		}
+		try {
+			const server = new PiWebServer(this.session, {
+				port,
+				host,
+				onNewSession: async () => {
+					await this.runtimeHost.newSession();
+				},
+				onSwitchSession: async (sessionPath) => {
+					await this.runtimeHost.switchSession(sessionPath);
+				},
+				onStateChange: () => {
+					this.footer.invalidate();
+					this.updateTerminalTitle();
+					this.ui.requestRender();
+				},
+			});
+			const url = await server.start();
+			this.webServer = server;
+			this.showStatus(`Web UI running: ${url}`);
+		} catch (error) {
+			this.showError(`Web UI failed to start: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async stopWebUiServer(): Promise<void> {
+		if (!this.webServer) {
+			this.showStatus("Web UI is not running");
+			return;
+		}
+		await this.webServer.stop().catch(() => {});
+		this.webServer = undefined;
+		this.showStatus("Web UI stopped");
+	}
+
+	private async handleWebCommand(arg?: string): Promise<void> {
+		const cmd = (arg ?? "").trim().toLowerCase();
+		const cfg = this.settingsManager.getWebUiSettings();
+		if (cmd === "stop" || cmd === "off") {
+			await this.stopWebUiServer();
+			return;
+		}
+		if (cmd === "status") {
+			const url = this.webServer?.getUrl();
+			this.showStatus(url ? `Web UI running: ${url}` : "Web UI is stopped (run /web start)");
+			return;
+		}
+		if (cmd === "start" || cmd === "on" || !this.webServer?.isRunning()) {
+			await this.startWebUiServer(this.options.webPort ?? cfg.port, cfg.host);
+			return;
+		}
+		const url = this.webServer.getUrl();
+		this.showStatus(url ? `Web UI running: ${url}` : "Web UI is stopped");
 	}
 
 	private triggerAutoSyncPush(): void {

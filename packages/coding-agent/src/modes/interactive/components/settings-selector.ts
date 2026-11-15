@@ -114,6 +114,7 @@ export interface SettingsConfig {
 	search?: SearchSettings;
 	memory?: Required<MemorySettings>;
 	codemodeEnabled?: boolean;
+	webUiEnabled?: boolean;
 	tuiStyle?: TuiStyle;
 	themeAccent?: ThemeAccent;
 	autoUpdate?: AutoUpdateMode;
@@ -166,6 +167,7 @@ export interface SettingsCallbacks {
 	onOpenSync?: () => void;
 	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
 	onCodemodeEnabledChange?: (enabled: boolean) => void;
+	onWebUiEnabledChange?: (enabled: boolean) => void;
 	onTuiStyleChange?: (style: TuiStyle) => void;
 	onThemeAccentChange?: (accent: ThemeAccent) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
@@ -858,6 +860,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "web-ui-enabled",
+				label: "Web UI (localhost)",
+				description: "Run parallel browser/PWA workspace on localhost alongside terminal TUI",
+				currentValue: config.webUiEnabled ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "cloud-sync",
 				label: "Cloud sync (/sync)",
 				description: "Sync settings, API keys, models, skills, and plugins by login & password",
@@ -1144,6 +1153,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "codemode-enabled":
 						callbacks.onCodemodeEnabledChange?.(newValue === "true");
+						break;
+					case "web-ui-enabled":
+						callbacks.onWebUiEnabledChange?.(newValue === "true");
 						break;
 					case "tui-style":
 						callbacks.onTuiStyleChange?.(newValue as TuiStyle);
