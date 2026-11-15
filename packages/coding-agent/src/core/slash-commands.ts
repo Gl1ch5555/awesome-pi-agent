@@ -26,6 +26,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 		argumentHint: "[review [focus] | clear project|memory|user]",
 	},
 	{ name: "sync", description: "Cloud sync (login, push, pull settings, API keys, models, skills)" },
+	{ name: "web", description: "Start, stop, or inspect the parallel localhost Web UI", argumentHint: "[start | stop | status]" },
 	{ name: "update", description: "Check and install updates from GitHub" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
 	{ name: "tree", description: "Navigate session tree (switch branches)" },

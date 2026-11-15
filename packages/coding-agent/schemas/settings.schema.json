@@ -781,6 +781,28 @@
         }
       }
     },
+    "webUi": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Auto-start the local Web UI server alongside the terminal TUI.",
+          "default": true
+        },
+        "port": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Preferred HTTP port for the local Web UI server.",
+          "default": 30141
+        },
+        "host": {
+          "type": "string",
+          "description": "Bind hostname for the local Web UI server (default: 127.0.0.1).",
+          "default": "127.0.0.1"
+        }
+      }
+    },
     "autoUpdate": {
       "anyOf": [
         {

@@ -242,6 +242,29 @@ const MemoryReviewModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("d
 		'Context strategy for background memory review: "auto" replays the session prefix (warm prompt cache), "digest" collapses older turns into a compact summary.',
 });
 
+const WebUiSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Auto-start the local Web UI server alongside the terminal TUI.",
+			default: SETTINGS_DEFAULTS.webUi.enabled,
+		}),
+	),
+	port: Type.Optional(
+		Type.Number({
+			minimum: 1,
+			maximum: 65535,
+			description: "Preferred HTTP port for the local Web UI server.",
+			default: SETTINGS_DEFAULTS.webUi.port,
+		}),
+	),
+	host: Type.Optional(
+		Type.String({
+			description: "Bind hostname for the local Web UI server (default: 127.0.0.1).",
+			default: SETTINGS_DEFAULTS.webUi.host,
+		}),
+	),
+});
+
 const MemorySettingsSchema = Type.Object({
 	reviewEnabled: Type.Optional(
 		Type.Boolean({
@@ -539,6 +562,7 @@ export const SettingsSchema = Type.Object(
 		voice: Type.Optional(VoiceSettingsSchema),
 		search: Type.Optional(SearchSettingsSchema),
 		memory: Type.Optional(MemorySettingsSchema),
+		webUi: Type.Optional(WebUiSettingsSchema),
 		autoUpdate: Type.Optional(
 			Type.Union([Type.Literal("auto"), Type.Literal("notify"), Type.Literal("off")], {
 				description: "GitHub auto-update mode (auto, notify, off).",
@@ -637,6 +661,7 @@ export type ThemeAccent = Static<typeof ThemeAccentSchema>;
 export type TuiStyle = Static<typeof TuiStyleSchema>;
 export type MemoryReviewMode = Static<typeof MemoryReviewModeSchema>;
 export interface MemorySettings extends Static<typeof MemorySettingsSchema> {}
+export interface WebUiSettings extends Static<typeof WebUiSettingsSchema> {}
 export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}

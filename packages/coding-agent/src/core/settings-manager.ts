@@ -32,6 +32,7 @@ import type {
 	TuiStyle,
 	VoiceSettings,
 	WarningSettings,
+	WebUiSettings,
 } from "./settings-schema.ts";
 
 export type {
@@ -65,6 +66,7 @@ export type {
 	TuiStyle,
 	VoiceSettings,
 	WarningSettings,
+	WebUiSettings,
 } from "./settings-schema.ts";
 /** Cache-warming profile. "idle" also warms between agent runs. */
 export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const satisfies readonly CacheWarmingMode[];
@@ -1632,6 +1634,39 @@ export class SettingsManager {
 		this.globalSettings.codemode ??= {};
 		this.globalSettings.codemode.enabled = enabled;
 		this.markModified("codemode", "enabled");
+		this.save();
+	}
+
+	getWebUiSettings(): Required<WebUiSettings> {
+		const envEnabled = process.env.PI_WEB;
+		const envPort = Number(process.env.PI_WEB_PORT);
+		return {
+			enabled:
+				envEnabled === "1" || envEnabled === "true"
+					? true
+					: (this.settings.webUi?.enabled ?? SETTINGS_DEFAULTS.webUi.enabled),
+			port:
+				Number.isFinite(envPort) && envPort > 0 && envPort <= 65535
+					? Math.floor(envPort)
+					: (this.settings.webUi?.port ?? SETTINGS_DEFAULTS.webUi.port),
+			host: process.env.PI_WEB_HOSTNAME || this.settings.webUi?.host || SETTINGS_DEFAULTS.webUi.host,
+		};
+	}
+
+	setWebUiSettings(patch: Partial<WebUiSettings>): void {
+		this.globalSettings.webUi ??= {};
+		if (patch.enabled !== undefined) {
+			this.globalSettings.webUi.enabled = patch.enabled;
+			this.markModified("webUi", "enabled");
+		}
+		if (patch.port !== undefined) {
+			this.globalSettings.webUi.port = Math.max(1, Math.min(65535, Math.floor(patch.port)));
+			this.markModified("webUi", "port");
+		}
+		if (patch.host !== undefined) {
+			this.globalSettings.webUi.host = patch.host;
+			this.markModified("webUi", "host");
+		}
 		this.save();
 	}
 
