@@ -5642,14 +5642,17 @@ export class InteractiveMode {
 			return;
 		}
 		try {
-			const server = new PiWebServer(this.session, {
+			const server = new PiWebServer(() => this.session, {
 				port,
 				host,
 				onNewSession: async () => {
-					await this.runtimeHost.newSession();
+					await this.handleClearCommand();
 				},
 				onSwitchSession: async (sessionPath) => {
-					await this.runtimeHost.switchSession(sessionPath);
+					const res = await this.handleResumeSession(sessionPath);
+					if (res.cancelled) {
+						throw new Error("Session switch cancelled");
+					}
 				},
 				onStateChange: () => {
 					this.footer.invalidate();
@@ -6631,6 +6634,7 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return result;
 			}
+			this.webServer?.rebindSession();
 			this.showStatus("Resumed session");
 			return result;
 		} catch (error: unknown) {
@@ -7799,6 +7803,7 @@ export class InteractiveMode {
 			if (result.cancelled) {
 				return;
 			}
+			this.webServer?.rebindSession();
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new ThemedText(() => theme.fg("accent", "✓ New session started"), 1, 1));
 			this.ui.requestRender();

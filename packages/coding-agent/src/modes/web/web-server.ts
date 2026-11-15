@@ -20,7 +20,7 @@ const DEFAULT_PORT = 30141;
 const MAX_PORT_ATTEMPTS = 20;
 
 export class PiWebServer {
-	private readonly session: AgentSession;
+	private readonly sessionSource: AgentSession | (() => AgentSession);
 	private readonly host: string;
 	private readonly preferredPort: number;
 	private readonly password?: string;
@@ -32,14 +32,18 @@ export class PiWebServer {
 	private sseClients = new Set<ServerResponse>();
 	private unsubscribeSession: (() => void) | undefined;
 
-	constructor(session: AgentSession, options: PiWebServerOptions = {}) {
-		this.session = session;
+	constructor(sessionSource: AgentSession | (() => AgentSession), options: PiWebServerOptions = {}) {
+		this.sessionSource = sessionSource;
 		this.host = options.host || process.env.PI_WEB_HOSTNAME || DEFAULT_HOST;
 		this.preferredPort = options.port || Number(process.env.PI_WEB_PORT) || DEFAULT_PORT;
 		this.password = options.password || process.env.PI_WEB_PASSWORD || undefined;
 		this.onStateChange = options.onStateChange;
 		this.onNewSession = options.onNewSession;
 		this.onSwitchSession = options.onSwitchSession;
+	}
+
+	private get session(): AgentSession {
+		return typeof this.sessionSource === "function" ? this.sessionSource() : this.sessionSource;
 	}
 
 	getUrl(): string | undefined {
@@ -52,11 +56,11 @@ export class PiWebServer {
 		return this.server !== undefined;
 	}
 
-	async start(): Promise<string> {
-		if (this.server && this.actualPort !== undefined) {
-			return this.getUrl()!;
+	private subscribeToCurrentSession(): void {
+		if (this.unsubscribeSession) {
+			this.unsubscribeSession();
+			this.unsubscribeSession = undefined;
 		}
-
 		this.unsubscribeSession = this.session.subscribe((event: AgentSessionEvent) => {
 			if (
 				event.type === "agent_start" ||
@@ -71,6 +75,20 @@ export class PiWebServer {
 				this.broadcastEvent(event);
 			}
 		});
+	}
+
+	rebindSession(): void {
+		if (!this.server) return;
+		this.subscribeToCurrentSession();
+		this.broadcastRaw({ type: "session_changed" });
+	}
+
+	async start(): Promise<string> {
+		if (this.server && this.actualPort !== undefined) {
+			return this.getUrl()!;
+		}
+
+		this.subscribeToCurrentSession();
 
 		for (let offset = 0; offset < MAX_PORT_ATTEMPTS; offset++) {
 			const candidatePort = this.preferredPort + offset;
@@ -121,6 +139,10 @@ export class PiWebServer {
 	}
 
 	private broadcastEvent(event: AgentSessionEvent): void {
+		this.broadcastRaw(event);
+	}
+
+	private broadcastRaw(event: unknown): void {
 		if (this.sseClients.size === 0) return;
 		const payload = `data: ${JSON.stringify(event)}\n\n`;
 		for (const client of this.sseClients) {
@@ -217,16 +239,20 @@ export class PiWebServer {
 		if (req.method === "GET" && pathname === "/api/state") {
 			const cwd = this.session.sessionManager.getCwd();
 			const currentFile = this.session.sessionManager.getSessionFile();
-			let sessions: Array<{ path: string; name?: string; firstMessage?: string; messageCount: number; active: boolean }> = [];
+			let sessions: Array<{ path: string; name?: string; firstMessage?: string; messageCount: number; modified: string; active: boolean }> = [];
 			try {
 				const listed = await SessionManager.list(cwd);
-				sessions = listed.slice(0, 30).map((s) => ({
-					path: s.path,
-					name: s.name,
-					firstMessage: s.firstMessage,
-					messageCount: s.messageCount,
-					active: s.path === currentFile,
-				}));
+				sessions = listed
+					.filter((s) => s.messageCount > 0 || s.path === currentFile)
+					.slice(0, 30)
+					.map((s) => ({
+						path: s.path,
+						name: s.name,
+						firstMessage: s.firstMessage,
+						messageCount: s.messageCount,
+						modified: s.modified.toISOString(),
+						active: s.path === currentFile,
+					}));
 			} catch {
 				// Ignore listing failures
 			}
@@ -276,7 +302,11 @@ export class PiWebServer {
 				this.sendJson(res, 501, { error: "New session is not supported in this host" });
 				return;
 			}
+			if (this.session.isStreaming) {
+				await this.session.abort().catch(() => {});
+			}
 			await this.onNewSession();
+			this.rebindSession();
 			this.onStateChange?.();
 			this.sendJson(res, 200, { ok: true });
 			return;
@@ -293,7 +323,11 @@ export class PiWebServer {
 				this.sendJson(res, 400, { error: "Missing session path" });
 				return;
 			}
+			if (this.session.isStreaming) {
+				await this.session.abort().catch(() => {});
+			}
 			await this.onSwitchSession(path);
+			this.rebindSession();
 			this.onStateChange?.();
 			this.sendJson(res, 200, { ok: true });
 			return;
