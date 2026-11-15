@@ -186,13 +186,23 @@ download_range_chunk() {
     fi
 
     local req_start=$(( start + have ))
-    if curl -fsSL --http1.1 --connect-timeout 15 --speed-limit 1024 --speed-time 20 \
+    local chunk_tmp="$TMP_DIR/chunk_${RANDOM}_$$.tmp"
+    rm -f "$chunk_tmp"
+    local http_code
+    http_code="$(curl -fsSL --http1.1 --connect-timeout 15 --speed-limit 1024 --speed-time 20 \
       "${CURL_AUTH[@]}" \
-      -r "${req_start}-${end}" "$url" >> "$dest" 2>/dev/null; then
-      have="$(file_size "$dest")"
-      if [ "$have" -eq "$expected" ]; then
-        return 0
-      fi
+      -r "${req_start}-${end}" -o "$chunk_tmp" -w '%{http_code}' "$url" 2>/dev/null || echo "000")"
+    if [ "$http_code" = "206" ] && [ -f "$chunk_tmp" ]; then
+      cat "$chunk_tmp" >> "$dest"
+      rm -f "$chunk_tmp"
+    elif [ "$http_code" = "200" ] && [ "$req_start" -eq "$start" ] && [ -f "$chunk_tmp" ]; then
+      mv -f "$chunk_tmp" "$dest"
+    else
+      rm -f "$chunk_tmp"
+    fi
+    have="$(file_size "$dest")"
+    if [ "$have" -eq "$expected" ]; then
+      return 0
     fi
 
     attempt=$((attempt + 1))
@@ -257,12 +267,11 @@ download_parallel_prebuilt() {
   local dest="$2"
   local parts="$DL_PARTS"
 
-  local probe_headers
-  probe_headers="$(curl -fsSLI --http1.1 --connect-timeout 15 "${CURL_AUTH[@]}" "$url" 2>/dev/null || true)"
+  local hdr_file="$TMP_DIR/probe.hdr"
   local effective_url total_size accept_ranges
-  effective_url="$(curl -fsSLI --http1.1 --connect-timeout 15 -o /dev/null -w '%{url_effective}' "${CURL_AUTH[@]}" "$url" 2>/dev/null || printf "%s" "$url")"
-  total_size="$(printf "%s\n" "$probe_headers" | tr -d '\r' | awk 'tolower($1)=="content-length:"{val=$2} END{print val+0}')"
-  accept_ranges="$(printf "%s\n" "$probe_headers" | tr -d '\r' | awk 'tolower($1)=="accept-ranges:"{val=tolower($2)} END{print val}')"
+  effective_url="$(curl -fsSLI --http1.1 --connect-timeout 15 -D "$hdr_file" -o /dev/null -w '%{url_effective}' "${CURL_AUTH[@]}" "$url" 2>/dev/null || printf "%s" "$url")"
+  total_size="$(tr -d '\r' < "$hdr_file" 2>/dev/null | awk 'tolower($1)=="content-length:"{val=$2} END{print val+0}')"
+  accept_ranges="$(tr -d '\r' < "$hdr_file" 2>/dev/null | awk 'tolower($1)=="accept-ranges:"{val=tolower($2)} END{print val}')"
 
   if [ -z "$total_size" ] || [ "$total_size" -lt 4194304 ] || [ "$accept_ranges" != "bytes" ] || [ "$parts" -le 1 ]; then
     download_single_with_resume "$effective_url" "$dest" "${total_size:-0}"
@@ -333,7 +342,12 @@ download_parallel_prebuilt() {
     local elapsed=$(( $(now_ms) - t0 ))
     render_progress_bar "$total_size" "$total_size" "$elapsed"
     printf "\n"
-    cat "$part_dir"/part.* > "$dest"
+    : > "$dest"
+    idx=0
+    while [ "$idx" -lt "$parts" ]; do
+      cat "$part_dir/part.${idx}" >> "$dest"
+      idx=$((idx + 1))
+    done
     return 0
   fi
 
@@ -352,7 +366,14 @@ if [ "$FORCE_SOURCE" != "1" ]; then
     STAGE_DIR="$TMP_DIR/stage"
     mkdir -p "$STAGE_DIR"
     info "Extracting archive..."
-    if tar -xzf "$ARCHIVE_PATH" -C "$STAGE_DIR" && [ -x "$STAGE_DIR/pi/pi" ]; then
+    if ! (tar -xzf "$ARCHIVE_PATH" -C "$STAGE_DIR" && [ -x "$STAGE_DIR/pi/pi" ]); then
+      warn "Archive incomplete, retrying single stream..."
+      rm -rf "$STAGE_DIR" "$ARCHIVE_PATH"
+      mkdir -p "$STAGE_DIR"
+      download_single_with_resume "${RELEASE_BASE}/${ASSET_NAME}" "$ARCHIVE_PATH" 0 || true
+      tar -xzf "$ARCHIVE_PATH" -C "$STAGE_DIR" 2>/dev/null || true
+    fi
+    if [ -x "$STAGE_DIR/pi/pi" ]; then
       rm -rf "$APP_DIR"
       mv "$STAGE_DIR/pi" "$APP_DIR"
       chmod +x "$APP_DIR/pi"
