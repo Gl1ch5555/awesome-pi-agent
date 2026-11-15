@@ -207,6 +207,23 @@ const SearchSettingsSchema = Type.Object({
 	googleCseId: Type.Optional(Type.String({ description: "Google Custom Search Engine ID (cx)." })),
 });
 
+const ThemeAccentSchema = Type.Union(
+	[
+		Type.Literal("default"),
+		Type.Literal("slate"),
+		Type.Literal("sage"),
+		Type.Literal("amber"),
+		Type.Literal("coral"),
+		Type.Literal("cyan"),
+		Type.Literal("violet"),
+		Type.Literal("rose"),
+		Type.Literal("mono"),
+	],
+	{
+		description: "Override theme accent and border highlight color independently of the selected theme.",
+	},
+);
+
 const TuiStyleSchema = Type.Union(
 	[
 		Type.Literal("native"),
@@ -561,6 +578,7 @@ export const SettingsSchema = Type.Object(
 			}),
 		),
 		tuiStyle: Type.Optional(TuiStyleSchema),
+		themeAccent: Type.Optional(ThemeAccentSchema),
 		fullscreenExitOutput: Type.Optional(
 			Type.Union([Type.Literal("transcript"), Type.Literal("resume-hint")], {
 				description: "No effect in regular TUI mode.",
@@ -615,6 +633,7 @@ export type VoiceModel = NonNullable<Static<typeof VoiceSettingsSchema>["model"]
 export interface VoiceSettings extends Static<typeof VoiceSettingsSchema> {}
 export type SearchProviderId = Static<typeof SearchProviderSchema>;
 export interface SearchSettings extends Static<typeof SearchSettingsSchema> {}
+export type ThemeAccent = Static<typeof ThemeAccentSchema>;
 export type TuiStyle = Static<typeof TuiStyleSchema>;
 export type MemoryReviewMode = Static<typeof MemoryReviewModeSchema>;
 export interface MemorySettings extends Static<typeof MemorySettingsSchema> {}

@@ -27,6 +27,7 @@ import {
 	type SearchProviderId,
 	type SearchSettings,
 	type SessionShareDestination,
+	type ThemeAccent,
 	type TuiMode,
 	type TuiStyle,
 	type VoiceSettings,
@@ -114,6 +115,7 @@ export interface SettingsConfig {
 	memory?: Required<MemorySettings>;
 	codemodeEnabled?: boolean;
 	tuiStyle?: TuiStyle;
+	themeAccent?: ThemeAccent;
 	autoUpdate?: AutoUpdateMode;
 	syncUser?: string;
 }
@@ -165,6 +167,7 @@ export interface SettingsCallbacks {
 	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
 	onCodemodeEnabledChange?: (enabled: boolean) => void;
 	onTuiStyleChange?: (style: TuiStyle) => void;
+	onThemeAccentChange?: (accent: ThemeAccent) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -883,6 +886,13 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.tuiStyle ?? SETTINGS_DEFAULTS.tuiStyle,
 				values: ["native", "rounded", "compact", "opentui", "sageveil"],
 			},
+			{
+				id: "theme-accent",
+				label: "Accent color",
+				description: "Override theme accent & border color independently",
+				currentValue: config.themeAccent ?? SETTINGS_DEFAULTS.themeAccent,
+				values: ["default", "slate", "sage", "amber", "coral", "cyan", "violet", "rose", "mono"],
+			},
 		];
 
 		// Only show image toggle if terminal supports it
@@ -1137,6 +1147,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "tui-style":
 						callbacks.onTuiStyleChange?.(newValue as TuiStyle);
+						break;
+					case "theme-accent":
+						callbacks.onThemeAccentChange?.(newValue as ThemeAccent);
 						break;
 					case "auto-update":
 						callbacks.onAutoUpdateChange?.(newValue as AutoUpdateMode);

@@ -27,6 +27,7 @@ import type {
 	Settings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
+	ThemeAccent,
 	TuiMode,
 	TuiStyle,
 	VoiceSettings,
@@ -59,6 +60,7 @@ export type {
 	TerminalSettings,
 	ThinkingBudgetsSettings,
 	TransportSetting,
+	ThemeAccent,
 	TuiMode,
 	TuiStyle,
 	VoiceSettings,
@@ -1593,6 +1595,16 @@ export class SettingsManager {
 			this.globalSettings.search.googleCseId = extras.googleCseId.trim() || undefined;
 			this.markModified("search", "googleCseId");
 		}
+		this.save();
+	}
+
+	getThemeAccent(): ThemeAccent {
+		return this.settings.themeAccent ?? SETTINGS_DEFAULTS.themeAccent;
+	}
+
+	setThemeAccent(accent: ThemeAccent): void {
+		this.globalSettings.themeAccent = accent;
+		this.markModified("themeAccent");
 		this.save();
 	}
 

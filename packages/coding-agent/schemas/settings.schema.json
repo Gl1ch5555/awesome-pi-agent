@@ -923,6 +923,47 @@
       ],
       "description": "Interactive TUI layout preset: native, rounded, compact, opentui, or sageveil."
     },
+    "themeAccent": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "type": "string",
+          "const": "slate"
+        },
+        {
+          "type": "string",
+          "const": "sage"
+        },
+        {
+          "type": "string",
+          "const": "amber"
+        },
+        {
+          "type": "string",
+          "const": "coral"
+        },
+        {
+          "type": "string",
+          "const": "cyan"
+        },
+        {
+          "type": "string",
+          "const": "violet"
+        },
+        {
+          "type": "string",
+          "const": "rose"
+        },
+        {
+          "type": "string",
+          "const": "mono"
+        }
+      ],
+      "description": "Override theme accent and border highlight color independently of the selected theme."
+    },
     "fullscreenExitOutput": {
       "anyOf": [
         {

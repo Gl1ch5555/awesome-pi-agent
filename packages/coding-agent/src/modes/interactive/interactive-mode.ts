@@ -224,6 +224,7 @@ import {
 	onThemeChange,
 	SYSTEM_THEME_NAME,
 	setRegisteredThemes,
+	setThemeAccentOverride,
 	stopThemeWatcher,
 	Theme,
 	type ThemeColor,
@@ -718,6 +719,7 @@ export class InteractiveMode {
 		this.outputPad = this.settingsManager.getOutputPad();
 
 		// Register themes from resource loader and initialize
+		setThemeAccentOverride(this.settingsManager.getThemeAccent());
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 		this.themeController = new InteractiveThemeController(this.ui, {
 			getSettingsManager: () => this.settingsManager,
@@ -5351,6 +5353,7 @@ export class InteractiveMode {
 					memory: this.settingsManager.getMemorySettings(),
 					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
 					tuiStyle: this.settingsManager.getTuiStyle(),
+					themeAccent: this.settingsManager.getThemeAccent(),
 					autoUpdate: this.settingsManager.getAutoUpdate(),
 					syncUser: readSyncState()?.user,
 				},
@@ -5576,6 +5579,15 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.ui.requestRender();
 						this.showStatus(`TUI style: ${style}`);
+						this.triggerAutoSyncPush();
+					},
+					onThemeAccentChange: (accent) => {
+						this.settingsManager.setThemeAccent(accent);
+						setThemeAccentOverride(accent);
+						this.updateEditorBorderColor();
+						this.footer.invalidate();
+						this.ui.requestRender();
+						this.showStatus(`Accent color: ${accent}`);
 						this.triggerAutoSyncPush();
 					},
 					onAutoUpdateChange: (mode) => {

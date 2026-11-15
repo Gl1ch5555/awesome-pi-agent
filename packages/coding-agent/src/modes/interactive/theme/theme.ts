@@ -378,17 +378,66 @@ export class Theme {
 
 let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 
+export type ThemeAccentPreset =
+	| "default"
+	| "slate"
+	| "sage"
+	| "amber"
+	| "coral"
+	| "cyan"
+	| "violet"
+	| "rose"
+	| "mono";
+
+const THEME_ACCENT_HEX: Record<Exclude<ThemeAccentPreset, "default">, string> = {
+	slate: "#8b9bb4",
+	sage: "#84b596",
+	amber: "#cca872",
+	coral: "#cf7d72",
+	cyan: "#7dcfff",
+	violet: "#bd93f9",
+	rose: "#ebbcba",
+	mono: "#c8ccd4",
+};
+
+let currentAccentOverride: ThemeAccentPreset = "default";
+
+function applyAccentOverride(fgColors: Record<ThemeColor, string | number>): void {
+	if (currentAccentOverride === "default") return;
+	const hex = THEME_ACCENT_HEX[currentAccentOverride];
+	fgColors.accent = hex;
+	fgColors.borderAccent = hex;
+	fgColors.customMessageLabel = hex;
+	fgColors.mdLink = hex;
+	fgColors.thinkingHigh = hex;
+}
+
+export function setThemeAccentOverride(accent: ThemeAccentPreset): void {
+	currentAccentOverride = accent;
+	if (currentThemeName && currentThemeName !== "<in-memory>") {
+		setTheme(currentThemeName, true);
+	}
+}
+
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const graphitePath = path.join(themesDir, "graphite.json");
-		const darkPath = path.join(themesDir, "dark.json");
-		const lightPath = path.join(themesDir, "light.json");
-		BUILTIN_THEMES = {
-			graphite: JSON.parse(stripBom(fs.readFileSync(graphitePath, "utf-8"))) as ThemeJson,
-			dark: JSON.parse(stripBom(fs.readFileSync(darkPath, "utf-8"))) as ThemeJson,
-			light: JSON.parse(stripBom(fs.readFileSync(lightPath, "utf-8"))) as ThemeJson,
-		};
+		const names = [
+			"graphite",
+			"dark",
+			"light",
+			"catppuccin-mocha",
+			"tokyo-night",
+			"dracula",
+			"nord",
+			"rose-pine",
+		] as const;
+		const loaded: Record<string, ThemeJson> = {};
+		for (const name of names) {
+			const filePath = path.join(themesDir, `${name}.json`);
+			loaded[name] = JSON.parse(stripBom(fs.readFileSync(filePath, "utf-8"))) as ThemeJson;
+		}
+		BUILTIN_THEMES = loaded;
 	}
 	return BUILTIN_THEMES;
 }
@@ -528,6 +577,7 @@ function createTheme(themeJson: ThemeJson, mode?: TerminalColorMode, sourcePath?
 	const colorMode = mode ?? getTerminalColorMode();
 	const resolvedColors = withThemeTokenFallbacks(resolveThemeColors(themeJson.colors, themeJson.vars));
 	const { fgColors, bgColors } = splitThemeColors(resolvedColors);
+	applyAccentOverride(fgColors);
 	return new Theme(fgColors, bgColors, colorMode, {
 		name: themeJson.name,
 		sourcePath,
@@ -543,6 +593,7 @@ function createSystemTheme(mode?: TerminalColorMode): Theme {
 		appearanceHint: getTerminalTheme(),
 	});
 	const { fgColors, bgColors } = splitThemeColors(withThemeTokenFallbacks(generated.colors));
+	applyAccentOverride(fgColors);
 	return new Theme(fgColors, bgColors, mode ?? getTerminalColorMode(), {
 		name: SYSTEM_THEME_NAME,
 		appearance: generated.appearance,
@@ -744,10 +795,9 @@ function startThemeWatcher(): void {
 	// Only watch if it's a custom theme (not built-in)
 	if (
 		!currentThemeName ||
-		currentThemeName === "graphite" ||
-		currentThemeName === "dark" ||
-		currentThemeName === "light" ||
-		currentThemeName === SYSTEM_THEME_NAME
+		currentThemeName === SYSTEM_THEME_NAME ||
+		Object.prototype.hasOwnProperty.call(getBuiltinThemes(), currentThemeName) ||
+		currentThemeName === "<in-memory>"
 	) {
 		return;
 	}
