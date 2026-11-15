@@ -269,6 +269,193 @@ function cleanupOldWindowsVersions(installRoot: string, keepDir: string): void {
 	}
 }
 
+async function downloadRangeChunkWithResume(
+	url: string,
+	destPath: string,
+	start: number,
+	end: number,
+	headers: Record<string, string>,
+	onBytes: (delta: number) => void,
+): Promise<boolean> {
+	const { appendFileSync, statSync } = await import("node:fs");
+	const expected = end - start + 1;
+
+	for (let attempt = 1; attempt <= 6; attempt++) {
+		let have = existsSync(destPath) ? statSync(destPath).size : 0;
+		if (have > expected) {
+			rmSync(destPath, { force: true });
+			have = 0;
+		}
+		if (have === expected) return true;
+
+		const reqStart = start + have;
+		try {
+			const res = await fetch(url, {
+				headers: { ...headers, Range: `bytes=${reqStart}-${end}` },
+				signal: AbortSignal.timeout(60_000),
+			});
+			if (res.status !== 206 && res.status !== 200) {
+				if (res.status === 416) rmSync(destPath, { force: true });
+				continue;
+			}
+			if (res.status === 200) {
+				// Server ignored Range; let caller fall back to single stream.
+				return false;
+			}
+			const reader = res.body?.getReader();
+			if (!reader) {
+				const buf = Buffer.from(await res.arrayBuffer());
+				appendFileSync(destPath, buf);
+				onBytes(buf.byteLength);
+			} else {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (value && value.byteLength > 0) {
+						appendFileSync(destPath, value);
+						onBytes(value.byteLength);
+					}
+				}
+			}
+			if ((existsSync(destPath) ? statSync(destPath).size : 0) === expected) return true;
+		} catch {
+			// Retry chunk from current byte offset
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+	}
+	return false;
+}
+
+async function downloadWithResume(
+	url: string,
+	destPath: string,
+	headers: Record<string, string>,
+	onProgress?: (stage: string) => void,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+	const { appendFileSync, statSync } = await import("node:fs");
+	const maxAttempts = 6;
+	let totalBytes: number | undefined;
+
+	// Try 4-stream parallel Range download when supported (much faster on mobile/VPN links).
+	try {
+		const headRes = await fetch(url, { method: "HEAD", headers, signal: AbortSignal.timeout(15_000) });
+		if (headRes.ok) {
+			const lenStr = headRes.headers.get("content-length");
+			const acceptRanges = headRes.headers.get("accept-ranges")?.toLowerCase();
+			const parsedLen = lenStr ? Number.parseInt(lenStr, 10) : 0;
+			if (acceptRanges === "bytes" && Number.isFinite(parsedLen) && parsedLen >= 4 * 1024 * 1024) {
+				const finalUrl = headRes.url || url;
+				const parts = 4;
+				const chunkSize = Math.floor(parsedLen / parts);
+				const partPaths = Array.from({ length: parts }, (_, i) => `${destPath}.part.${i}`);
+				let downloaded = 0;
+				let lastReportedPct = -1;
+				const totalMb = (parsedLen / 1048576).toFixed(1);
+				const report = (delta: number) => {
+					downloaded += delta;
+					const pct = Math.min(100, Math.floor((downloaded * 100) / parsedLen));
+					if (pct !== lastReportedPct && (pct % 5 === 0 || pct === 100)) {
+						lastReportedPct = pct;
+						const doneMb = (downloaded / 1048576).toFixed(1);
+						onProgress?.(`Downloading prebuilt binary (${pct}% · ${doneMb}/${totalMb} MB)...`);
+					}
+				};
+				const results = await Promise.all(
+					partPaths.map((p, i) => {
+						const start = i * chunkSize;
+						const end = i === parts - 1 ? parsedLen - 1 : start + chunkSize - 1;
+						return downloadRangeChunkWithResume(finalUrl, p, start, end, headers, report);
+					}),
+				);
+				if (results.every(Boolean)) {
+					rmSync(destPath, { force: true });
+					const { readFileSync } = await import("node:fs");
+					for (const p of partPaths) {
+						appendFileSync(destPath, readFileSync(p));
+						rmSync(p, { force: true });
+					}
+					if (statSync(destPath).size === parsedLen) {
+						return { ok: true };
+					}
+				}
+				for (const p of partPaths) rmSync(p, { force: true });
+				rmSync(destPath, { force: true });
+			}
+		}
+	} catch {
+		// Fall through to single resumable stream
+	}
+
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const existingBytes = existsSync(destPath) ? statSync(destPath).size : 0;
+		const reqHeaders: Record<string, string> = { ...headers };
+		if (existingBytes > 0) {
+			reqHeaders.Range = `bytes=${existingBytes}-`;
+		}
+
+		try {
+			const res = await fetch(url, {
+				headers: reqHeaders,
+				signal: AbortSignal.timeout(90_000),
+			});
+
+			if (res.status === 416) {
+				rmSync(destPath, { force: true });
+				continue;
+			}
+			if (!res.ok) {
+				return { ok: false, reason: `HTTP ${res.status} ${res.statusText}` };
+			}
+
+			// If server ignored Range and sent full 200, restart file from byte 0.
+			if (existingBytes > 0 && res.status === 200) {
+				rmSync(destPath, { force: true });
+			}
+
+			if (totalBytes === undefined) {
+				const contentRange = res.headers.get("content-range");
+				const rangeMatch = contentRange?.match(/\/(\d+)$/);
+				if (rangeMatch?.[1]) {
+					totalBytes = Number.parseInt(rangeMatch[1], 10);
+				} else {
+					const contentLength = res.headers.get("content-length");
+					if (contentLength) {
+						const parsed = Number.parseInt(contentLength, 10);
+						if (Number.isFinite(parsed) && parsed > 0) totalBytes = parsed;
+					}
+				}
+			}
+
+			const reader = res.body?.getReader();
+			if (!reader) {
+				writeFileSync(destPath, Buffer.from(await res.arrayBuffer()));
+			} else {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					if (value && value.byteLength > 0) {
+						appendFileSync(destPath, value);
+					}
+				}
+			}
+
+			const finalSize = existsSync(destPath) ? statSync(destPath).size : 0;
+			if (totalBytes !== undefined && finalSize < totalBytes) {
+				throw new Error(`Truncated download (${finalSize}/${totalBytes} bytes)`);
+			}
+			return { ok: true };
+		} catch (err) {
+			if (attempt === maxAttempts) {
+				return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+			}
+			onProgress?.(`Download interrupted, resuming (${attempt}/${maxAttempts})...`);
+			await new Promise((resolve) => setTimeout(resolve, 1500));
+		}
+	}
+
+	return { ok: false, reason: "Download failed after retries" };
+}
+
 async function tryUpdateFromPrebuiltRelease(
 	installRoot: string,
 	headers: Record<string, string>,
@@ -282,14 +469,9 @@ async function tryUpdateFromPrebuiltRelease(
 
 	try {
 		onProgress?.(`Downloading prebuilt binary (${assetName})...`);
-		const res = await fetch(`${RELEASE_BASE_URL}/${assetName}`, {
-			headers,
-			signal: AbortSignal.timeout(90_000),
-		});
-		if (!res.ok) return { ok: false, reason: `HTTP ${res.status} ${res.statusText}` };
-
 		const archivePath = join(tempDir, assetName);
-		writeFileSync(archivePath, Buffer.from(await res.arrayBuffer()));
+		const downloaded = await downloadWithResume(`${RELEASE_BASE_URL}/${assetName}`, archivePath, headers, onProgress);
+		if (!downloaded.ok) return { ok: false, reason: downloaded.reason };
 
 		const stageDir = join(tempDir, "stage");
 		mkdirSync(stageDir, { recursive: true });
