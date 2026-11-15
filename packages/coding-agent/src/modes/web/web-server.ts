@@ -1,6 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
@@ -20,6 +20,13 @@ export interface PiWebServerOptions {
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 30141;
 const MAX_PORT_ATTEMPTS = 20;
+
+function extractCleanTitle(raw: string): string {
+	const noUrls = raw.replace(/https?:\/\/\S+/gi, "").replace(/`[^`]*`/g, "").replace(/\s+/g, " ").trim();
+	const base = noUrls || raw.replace(/^https?:\/\/(www\.)?/i, "").split(/[/?#]/)[0] || "Новая сессия";
+	const words = base.split(" ").filter(Boolean).slice(0, 6).join(" ");
+	return words.length > 42 ? `${words.slice(0, 41)}…` : words;
+}
 
 export class PiWebServer {
 	private readonly sessionSource: AgentSession | (() => AgentSession);
@@ -48,6 +55,53 @@ export class PiWebServer {
 		return typeof this.sessionSource === "function" ? this.sessionSource() : this.sessionSource;
 	}
 
+	private get archiveFilePath(): string {
+		return join(this.session.settingsManager.getAgentDir(), "web-archived-sessions.json");
+	}
+
+	private loadArchivedSet(): Set<string> {
+		try {
+			if (!existsSync(this.archiveFilePath)) return new Set();
+			const parsed = JSON.parse(readFileSync(this.archiveFilePath, "utf-8"));
+			return Array.isArray(parsed) ? new Set(parsed.filter((x): x is string => typeof x === "string")) : new Set();
+		} catch {
+			return new Set();
+		}
+	}
+
+	private saveArchivedSet(set: Set<string>): void {
+		try {
+			mkdirSync(dirname(this.archiveFilePath), { recursive: true });
+			writeFileSync(this.archiveFilePath, JSON.stringify(Array.from(set), null, 2));
+		} catch {
+			// ignore write errors
+		}
+	}
+
+	private maybeAutoNameSession(): void {
+		try {
+			if (this.session.sessionManager.getSessionName()) return;
+			const firstUser = this.session.messages.find((m) => m.role === "user");
+			if (!firstUser) return;
+			const raw =
+				typeof firstUser.content === "string"
+					? firstUser.content
+					: Array.isArray(firstUser.content)
+						? firstUser.content
+								.filter((c): c is { type: "text"; text: string } => c.type === "text" && typeof c.text === "string")
+								.map((c) => c.text)
+								.join(" ")
+						: "";
+			if (!raw.trim()) return;
+			const title = extractCleanTitle(raw);
+			if (title) {
+				this.session.setSessionName(title);
+			}
+		} catch {
+			// ignore auto-title failures
+		}
+	}
+
 	getUrl(): string | undefined {
 		if (!this.server || this.actualPort === undefined) return undefined;
 		const displayHost = this.host === "0.0.0.0" ? "127.0.0.1" : this.host;
@@ -64,6 +118,9 @@ export class PiWebServer {
 			this.unsubscribeSession = undefined;
 		}
 		this.unsubscribeSession = this.session.subscribe((event: AgentSessionEvent) => {
+			if (event.type === "agent_end") {
+				this.maybeAutoNameSession();
+			}
 			if (
 				event.type === "agent_start" ||
 				event.type === "agent_end" ||
@@ -242,6 +299,7 @@ export class PiWebServer {
 		if (req.method === "GET" && pathname === "/api/state") {
 			const cwd = this.session.sessionManager.getCwd();
 			const currentFile = this.session.sessionManager.getSessionFile();
+			const archived = this.loadArchivedSet();
 			let sessions: Array<{
 				path: string;
 				cwd: string;
@@ -250,20 +308,22 @@ export class PiWebServer {
 				messageCount: number;
 				modified: string;
 				active: boolean;
+				archived: boolean;
 			}> = [];
 			try {
 				const listed = await SessionManager.listAll();
 				sessions = listed
 					.filter((s) => s.messageCount > 0 || s.path === currentFile)
-					.slice(0, 60)
+					.slice(0, 500)
 					.map((s) => ({
 						path: s.path,
 						cwd: s.cwd || cwd,
 						name: s.name,
-						firstMessage: s.firstMessage,
+						firstMessage: s.firstMessage ? extractCleanTitle(s.firstMessage) : undefined,
 						messageCount: s.messageCount,
 						modified: s.modified.toISOString(),
 						active: s.path === currentFile,
+						archived: archived.has(s.path),
 					}));
 			} catch {
 				// Ignore listing failures
@@ -338,7 +398,51 @@ export class PiWebServer {
 				if (lvl) {
 					this.session.setThinkingLevel(lvl, { persist: true });
 					this.onStateChange?.();
+					this.broadcastRaw({ type: "system_notice", text: `Уровень мышления: ${lvl}` });
 				}
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (text.startsWith("/name ")) {
+				const name = text.slice("/name ".length).trim();
+				if (name) {
+					this.session.setSessionName(name);
+					this.onStateChange?.();
+					this.broadcastRaw({ type: "system_notice", text: `Сессия переименована: ${name}` });
+				}
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (text.startsWith("/model ")) {
+				const q = text.slice("/model ".length).trim().toLowerCase();
+				const found = this.session.modelRuntime
+					.getAvailableSnapshot()
+					.find((m) => m.id.toLowerCase() === q || `${m.provider}/${m.id}`.toLowerCase() === q || m.id.toLowerCase().includes(q));
+				if (found) {
+					await this.session.setModel(found, { persist: true });
+					this.onStateChange?.();
+					this.broadcastRaw({ type: "system_notice", text: `Модель переключена: ${found.provider}/${found.id}` });
+				} else {
+					this.broadcastRaw({ type: "system_notice", text: `Модель не найдена: ${q}` });
+				}
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (text === "/status") {
+				const usage = this.session.getContextUsage();
+				const m = this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : "none";
+				this.broadcastRaw({
+					type: "system_notice",
+					text: `Модель: ${m} · Мышление: ${this.session.thinkingLevel} · Контекст: ${Math.round(usage?.percent || 0)}%`,
+				});
+				this.sendJson(res, 200, { ok: true });
+				return;
+			}
+			if (text === "/help") {
+				this.broadcastRaw({
+					type: "system_notice",
+					text: "Команды: /new, /compact, /model <id>, /thinking <lvl>, /name <title>, /status",
+				});
 				this.sendJson(res, 200, { ok: true });
 				return;
 			}
@@ -394,26 +498,34 @@ export class PiWebServer {
 				this.session.settingsManager.getVoiceSettings?.()?.groqApiKey ||
 				"";
 			if (!groqKey) {
-				this.sendJson(res, 400, { error: "Groq API key not configured (/voice)" });
+				this.sendJson(res, 200, { fallback: true, error: "Groq API key not configured" });
 				return;
 			}
-			const buf = Buffer.from(audioBase64, "base64");
-			const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
-			const form = new FormData();
-			form.append("file", new Blob([buf], { type: mimeType }), `voice.${ext}`);
-			form.append("model", "whisper-large-v3");
-			form.append("language", "ru");
-			const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-				method: "POST",
-				headers: { Authorization: `Bearer ${groqKey}` },
-				body: form,
-			});
-			if (!groqRes.ok) {
-				this.sendJson(res, groqRes.status, { error: `Groq HTTP ${groqRes.status}` });
-				return;
+			try {
+				const buf = Buffer.from(audioBase64, "base64");
+				const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+				const form = new FormData();
+				form.append("file", new Blob([buf], { type: mimeType }), `voice.${ext}`);
+				form.append("model", "whisper-large-v3");
+				form.append("language", "ru");
+				const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${groqKey}`,
+						"User-Agent": "pi-awesome/1.5.2",
+						Accept: "application/json",
+					},
+					body: form,
+				});
+				if (!groqRes.ok) {
+					this.sendJson(res, 200, { fallback: true, error: `Groq HTTP ${groqRes.status}` });
+					return;
+				}
+				const groqJson = (await groqRes.json()) as { text?: string };
+				this.sendJson(res, 200, { text: groqJson.text || "" });
+			} catch (err) {
+				this.sendJson(res, 200, { fallback: true, error: err instanceof Error ? err.message : String(err) });
 			}
-			const groqJson = (await groqRes.json()) as { text?: string };
-			this.sendJson(res, 200, { text: groqJson.text || "" });
 			return;
 		}
 
@@ -428,10 +540,22 @@ export class PiWebServer {
 				this.sendJson(res, 501, { error: "New session is not supported in this host" });
 				return;
 			}
+			const body = (await this.readJsonBody(req).catch(() => ({}))) as Record<string, unknown>;
+			const targetCwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : undefined;
 			if (this.session.isStreaming) {
 				await this.session.abort().catch(() => {});
 			}
-			await this.onNewSession();
+			if (targetCwd && targetCwd !== this.session.sessionManager.getCwd() && this.onSwitchSession) {
+				const sm = SessionManager.create(targetCwd);
+				const newFile = sm.getSessionFile();
+				if (newFile) {
+					await this.onSwitchSession(newFile);
+				} else {
+					await this.onNewSession();
+				}
+			} else {
+				await this.onNewSession();
+			}
 			this.rebindSession();
 			this.onStateChange?.();
 			this.sendJson(res, 200, { ok: true });
@@ -455,6 +579,22 @@ export class PiWebServer {
 			await this.onSwitchSession(path);
 			this.rebindSession();
 			this.onStateChange?.();
+			this.sendJson(res, 200, { ok: true });
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/archive-session") {
+			const body = await this.readJsonBody(req);
+			const path = typeof body.path === "string" ? body.path : "";
+			const archive = body.archived !== false;
+			if (!path) {
+				this.sendJson(res, 400, { error: "Missing session path" });
+				return;
+			}
+			const set = this.loadArchivedSet();
+			if (archive) set.add(path);
+			else set.delete(path);
+			this.saveArchivedSet(set);
 			this.sendJson(res, 200, { ok: true });
 			return;
 		}
