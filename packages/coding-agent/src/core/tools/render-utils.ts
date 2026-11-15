@@ -111,12 +111,24 @@ export function formatToolCallWithArgs(title: string, args: unknown, theme: Them
 
 /** Duration as `4.2s` below a minute, then `1m 30s` and `2h 3m 4s`. */
 export function formatToolDuration(ms: number): string {
-	const seconds = ms / 1000;
+	const seconds = Math.max(0, ms) / 1000;
 	if (seconds < 60) return `${seconds.toFixed(1)}s`;
 
 	const totalSeconds = Math.floor(seconds);
 	const minutes = Math.floor(totalSeconds / 60);
 	const remainder = totalSeconds % 60;
+	if (minutes < 60) return `${minutes}m ${remainder}s`;
+
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+}
+
+/** Integer-seconds duration as `12s` below a minute, then `1m 30s` and `2h 3m 4s`. */
+export function formatCountdownSeconds(totalSeconds: number): string {
+	const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+	if (safeSeconds < 60) return `${safeSeconds}s`;
+
+	const minutes = Math.floor(safeSeconds / 60);
+	const remainder = safeSeconds % 60;
 	if (minutes < 60) return `${minutes}m ${remainder}s`;
 
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;

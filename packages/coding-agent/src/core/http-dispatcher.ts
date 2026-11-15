@@ -91,6 +91,8 @@ export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TI
 			bodyTimeout: normalizedTimeoutMs,
 			connect: {
 				autoSelectFamilyAttemptTimeout: DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
+				keepAlive: true,
+				keepAliveInitialDelay: 15_000,
 			},
 			headersTimeout: normalizedTimeoutMs,
 			clientFactory: createUndiciClient,

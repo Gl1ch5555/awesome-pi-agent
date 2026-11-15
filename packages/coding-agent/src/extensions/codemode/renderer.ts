@@ -9,7 +9,7 @@
 
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
-import { getTextOutput, replaceTabs, startToolTimer, str, toolTimerText } from "../../core/tools/render-utils.ts";
+import { getTextOutput, replaceTabs, startToolTimer, str, toolTimerText, formatToolDuration } from "../../core/tools/render-utils.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { VisualLinePreview } from "../../modes/interactive/components/visual-truncate.ts";
 import { CodeHighlighter, type Theme } from "../../modes/interactive/theme/theme.ts";
@@ -33,7 +33,7 @@ function expandHint(theme: Theme, hidden: number, noun: string): string {
 
 function formatDuration(ms: number | undefined): string {
 	if (ms === undefined) return "";
-	return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+	return ms < 1000 ? `${Math.round(ms)}ms` : formatToolDuration(ms);
 }
 
 /** Cents for larger amounts, two significant digits for the fractions of a cent classifier calls cost. */

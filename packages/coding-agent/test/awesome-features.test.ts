@@ -237,9 +237,19 @@ describe("awesome-pi-agent customizations", () => {
 			low: "low",
 			medium: "medium",
 			high: "high",
-			xhigh: null,
+			xhigh: "xhigh",
 		});
 		expect(gemini4.input).toContain("image");
+
+		const geminiCarbon = inferModelMetadata({ id: "gemini-4-carbon" });
+		expect(geminiCarbon.thinkingLevelMap).toEqual({
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+		});
 
 		const geminiFlash = inferModelMetadata({ id: "gemini-3-flash-preview" });
 		expect(geminiFlash.thinkingLevelMap).toEqual({
@@ -280,7 +290,7 @@ describe("awesome-pi-agent customizations", () => {
 		const provider = composeModelProvider("carbon", undefined, config, undefined);
 		const model = provider.getModels()[0]!;
 		expect(model.reasoning).toBe(true);
-		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high"]);
+		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh"]);
 	});
 
 	it("tails live lines while streaming write tool calls and shows line numbers", async () => {
@@ -305,6 +315,7 @@ describe("awesome-pi-agent customizations", () => {
 		expect(streamingOut).toContain("writing 20 lines...");
 		expect(streamingOut).toContain("earlier lines, 20 total");
 		expect(streamingOut).toContain("20 │");
+		expect(streamingOut).toContain("… (streaming)");
 		expect(streamingOut).not.toMatch(/^\s*1 │/m);
 
 		comp.setArgsComplete();
@@ -316,6 +327,27 @@ describe("awesome-pi-agent customizations", () => {
 		expect(doneOut).toContain("20 lines");
 		expect(doneOut).toContain("1 │");
 		expect(doneOut).toContain("more lines, 20 total");
+	});
+
+	it("formats working indicator elapsed time and retry countdowns in minutes when >= 60s", async () => {
+		const { WorkingStatusIndicator, RetryStatusIndicator } = await import(
+			"../src/modes/interactive/components/status-indicator.js"
+		);
+		initTheme("graphite");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-15T00:00:00Z"));
+		const tui = { requestRender: () => {}, terminal: { rows: 10 } } as any;
+		const working = new WorkingStatusIndicator(tui, "Working...");
+		const retry = new RetryStatusIndicator(tui, 1, 3, 95_000);
+		try {
+			expect(retry.render(120)[1]!.replace(/\x1b\[[0-9;]*m/g, "")).toContain("Retrying (1/3) in 1m 35s...");
+			vi.advanceTimersByTime(125_100);
+			expect(working.render(120)[1]!.replace(/\x1b\[[0-9;]*m/g, "")).toContain("Working... · 2m 5s");
+		} finally {
+			working.dispose();
+			retry.dispose();
+			vi.useRealTimers();
+		}
 	});
 
 	it("starts and stops hold-space voice dictation reliably on repeated space without Kitty release events", async () => {

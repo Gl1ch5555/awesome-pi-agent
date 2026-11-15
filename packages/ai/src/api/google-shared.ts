@@ -33,8 +33,8 @@ type GoogleApiType = "google-generative-ai" | "google-vertex";
  * Thinking level for Gemini 3 models.
  * Mirrors Google's ThinkingLevel enum values.
  */
-export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
-export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "xhigh" | "max">;
+export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH";
+export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "max">;
 
 const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThinkingLevel> = {
 	THINKING_LEVEL_UNSPECIFIED: GoogleSdkThinkingLevel.THINKING_LEVEL_UNSPECIFIED,
@@ -42,6 +42,8 @@ const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThi
 	LOW: GoogleSdkThinkingLevel.LOW,
 	MEDIUM: GoogleSdkThinkingLevel.MEDIUM,
 	HIGH: GoogleSdkThinkingLevel.HIGH,
+	// @google/genai@2.32.0 enum omits XHIGH even though its string union accepts it for Gemini 4 Hydrogen.
+	XHIGH: "XHIGH" as GoogleSdkThinkingLevel,
 };
 
 /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
@@ -56,6 +58,7 @@ export function resolveGoogleThinkingLevel<T extends GoogleApiType>(
 		case "low":
 		case "medium":
 		case "high":
+		case "xhigh":
 			return resolvedLevel;
 		default:
 			throw new Error(
@@ -94,6 +97,8 @@ export function toGoogleThinkingLevel(level: ResolvedGoogleThinkingLevel): Googl
 			return "MEDIUM";
 		case "high":
 			return "HIGH";
+		case "xhigh":
+			return "XHIGH";
 	}
 }
 

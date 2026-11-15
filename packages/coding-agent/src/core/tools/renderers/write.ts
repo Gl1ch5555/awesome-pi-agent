@@ -106,6 +106,7 @@ function trimTrailingEmptyLines(lines: readonly string[]): string[] {
 	return lines.slice(0, end);
 }
 const WRITE_PREVIEW_LINES = 12;
+const WRITE_GUTTER_MIN_WIDTH = 3;
 
 function formatWriteCall(
 	args: { path?: string; file_path?: string; content?: string } | undefined,
@@ -119,6 +120,7 @@ function formatWriteCall(
 	const fileContent = str(args?.content);
 	const pathDisplay = renderToolPath(rawPath, theme, cwd);
 	let text = `${theme.fg("toolTitle", theme.bold("write"))} ${pathDisplay}`;
+	const isStreamingArgs = options.isPartial && !options.argsComplete && !options.executionStarted;
 
 	if (fileContent === null) {
 		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
@@ -129,7 +131,6 @@ function formatWriteCall(
 			: normalizeDisplayText(fileContent).split("\n");
 		const lines = trimTrailingEmptyLines(renderedLines);
 		const totalLines = lines.length;
-		const isStreamingArgs = options.isPartial && !options.argsComplete && !options.executionStarted;
 		if (totalLines > 0) {
 			const statusLabel = isStreamingArgs
 				? `· writing ${totalLines} ${totalLines === 1 ? "line" : "lines"}...`
@@ -144,7 +145,7 @@ function formatWriteCall(
 		const startIndex = shouldTail ? totalLines - maxLines : 0;
 		const displayLines = shouldTail ? lines.slice(startIndex) : lines.slice(0, maxLines);
 		const remaining = totalLines - maxLines;
-		const gutterWidth = Math.max(1, String(totalLines).length);
+		const gutterWidth = Math.max(WRITE_GUTTER_MIN_WIDTH, String(totalLines).length);
 
 		text += "\n\n";
 		if (shouldTail && startIndex > 0) {
@@ -157,9 +158,13 @@ function formatWriteCall(
 				return `${theme.fg("dim", `${lineNum} │ `)}${body}`;
 			})
 			.join("\n");
-		if (!shouldTail && remaining > 0) {
+		if (isStreamingArgs) {
+			text += `\n${theme.fg("dim", "… (streaming)")}`;
+		} else if (!shouldTail && remaining > 0) {
 			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
 		}
+	} else if (isStreamingArgs) {
+		text += ` ${theme.fg("muted", "· streaming...")}`;
 	}
 
 	return text;
@@ -188,10 +193,25 @@ export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rend
 		const fileContent = str(renderArgs?.content);
 		const component =
 			(context.lastComponent as WriteCallRenderComponent | undefined) ?? new WriteCallRenderComponent();
-		component.cache =
-			fileContent !== null && !context.argsComplete
-				? updateWriteHighlightCacheIncremental(component.cache, rawPath, fileContent, component.highlighter)
-				: undefined;
+		if (fileContent === null) {
+			component.cache = undefined;
+		} else if (!context.argsComplete) {
+			component.cache = updateWriteHighlightCacheIncremental(
+				component.cache,
+				rawPath,
+				fileContent,
+				component.highlighter,
+			);
+		} else if (
+			component.cache &&
+			component.cache.rawPath === rawPath &&
+			component.cache.rawContent === fileContent &&
+			component.cache.normalizedLines.length <= WRITE_PARTIAL_FULL_HIGHLIGHT_LINES
+		) {
+			// Keep the incremental highlight cache when args complete for short files.
+		} else {
+			component.cache = undefined;
+		}
 		component.setText(
 			formatWriteCall(
 				renderArgs,

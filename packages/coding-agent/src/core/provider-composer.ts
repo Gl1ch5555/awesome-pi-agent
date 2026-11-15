@@ -230,6 +230,7 @@ function modelFromJson(
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid maxTokens`);
 	}
 	const isGemini4 = /(?:^|\/)gemini-4/i.test(definition.id);
+	const isGemini4Hydrogen = /(?:^|\/)gemini-4-hydrogen/i.test(definition.id);
 	const isGemini3Pro = /(?:^|\/)gemini-3(?:\.\d+)?-pro/i.test(definition.id);
 	const isGemini3Flash = /(?:^|\/)gemini-3(?:\.\d+)?-flash/i.test(definition.id);
 	const legacyOffMap =
@@ -242,7 +243,9 @@ function modelFromJson(
 		upgradeGemini4Reasoning || legacyOffMap
 			? isGemini3Flash
 				? { off: null, minimal: "minimal", low: "low", medium: "medium", high: "high", xhigh: null }
-				: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null }
+				: isGemini4Hydrogen
+					? { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" }
+					: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null }
 			: definition.thinkingLevelMap;
 
 	return {

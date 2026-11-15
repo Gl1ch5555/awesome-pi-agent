@@ -2106,4 +2106,30 @@ describe("openai-completions tool_choice", () => {
 		const replayedAssistant = replayPayload.messages.find((m: any) => m.role === "assistant");
 		expect(replayedAssistant.tool_calls[0].extra_content).toEqual({ google: { thought_signature: "SIG123" } });
 	});
+
+	it("sends XHIGH thinking_level for gemini-4-hydrogen and caps gemini-4-carbon to HIGH", async () => {
+		const hydrogen = {
+			...localOpenAICompletionsModel,
+			id: "gemini-4-hydrogen",
+			name: "gemini-4-hydrogen",
+			reasoning: true,
+			thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+		} satisfies Model<"openai-completions">;
+		const hydrogenParams = (await captureSimpleParams(hydrogen, "xhigh")) as { google?: unknown };
+		expect(hydrogenParams.google).toEqual({
+			thinking_config: { include_thoughts: true, thinking_level: "XHIGH" },
+		});
+
+		const carbon = {
+			...localOpenAICompletionsModel,
+			id: "gemini-4-carbon",
+			name: "gemini-4-carbon",
+			reasoning: true,
+			thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null },
+		} satisfies Model<"openai-completions">;
+		const carbonParams = (await captureSimpleParams(carbon, "xhigh")) as { google?: unknown };
+		expect(carbonParams.google).toEqual({
+			thinking_config: { include_thoughts: true, thinking_level: "HIGH" },
+		});
+	});
 });

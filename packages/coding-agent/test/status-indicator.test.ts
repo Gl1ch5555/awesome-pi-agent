@@ -108,4 +108,23 @@ describe("status indicators", () => {
 
 		expect(requestRender).toHaveBeenCalledTimes(callsBeforeDispose);
 	});
+
+	it("formats working elapsed time and retry countdowns in minutes once >= 60s", () => {
+		initTheme("dark");
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-11-15T00:00:00Z"));
+		const tui = { requestRender: vi.fn(), terminal: { rows: 10 } } as unknown as TUI;
+		const working = new WorkingStatusIndicator(tui, "Working...");
+		const retry = new RetryStatusIndicator(tui, 1, 3, 90_000);
+		try {
+			expect(stripAnsi(retry.render(120)[1]!)).toContain("Retrying (1/3) in 1m 30s...");
+			vi.advanceTimersByTime(12_300);
+			expect(stripAnsi(working.render(120)[1]!)).toContain("Working... · 12.3s");
+			vi.advanceTimersByTime(53_000);
+			expect(stripAnsi(working.render(120)[1]!)).toContain("Working... · 1m 5s");
+		} finally {
+			working.dispose();
+			retry.dispose();
+		}
+	});
 });

@@ -86,4 +86,23 @@ describe("provider request retries", () => {
 		expect(request).toHaveBeenCalledTimes(1);
 		expect(vi.getTimerCount()).toBe(0);
 	});
+
+	it("retries transient ECONNRESET transport errors with isRetry=true", async () => {
+		vi.useFakeTimers();
+		const resetError = Object.assign(new TypeError("ECONNRESET: The socket connection was closed unexpectedly."), {
+			code: "ECONNRESET",
+		});
+		const request = vi
+			.fn<(ctx: { attempt: number; isRetry: boolean }) => Promise<string>>()
+			.mockRejectedValueOnce(resetError)
+			.mockResolvedValue("ok");
+
+		const result = retryProviderRequest(request, { transportRetries: 1 });
+		await vi.advanceTimersByTimeAsync(500);
+
+		await expect(result).resolves.toBe("ok");
+		expect(request).toHaveBeenCalledTimes(2);
+		expect(request.mock.calls[0]?.[0]).toEqual({ attempt: 0, isRetry: false });
+		expect(request.mock.calls[1]?.[0]).toEqual({ attempt: 1, isRetry: true });
+	});
 });

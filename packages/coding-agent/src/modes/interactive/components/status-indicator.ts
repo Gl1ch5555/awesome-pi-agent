@@ -1,5 +1,6 @@
 import { type Component, Loader, type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import type { WorkingIndicatorOptions } from "../../../core/extensions/index.ts";
+import { formatCountdownSeconds, formatToolDuration } from "../../../core/tools/render-utils.ts";
 import { theme } from "../theme/theme.ts";
 import { CountdownTimer } from "./countdown-timer.ts";
 import { keyText } from "./keybinding-hints.ts";
@@ -51,15 +52,13 @@ export class WorkingStatusIndicator extends StatusIndicator {
 		);
 		this.baseMessage = message;
 		this.elapsedTimer = setInterval(() => {
-			const elapsedSec = ((Date.now() - this.startedAt) / 1000).toFixed(1);
-			super.setMessage(`${this.baseMessage} · ${elapsedSec}s`);
+			super.setMessage(`${this.baseMessage} · ${formatToolDuration(Date.now() - this.startedAt)}`);
 		}, 150);
 	}
 
 	override setMessage(message: string): void {
 		this.baseMessage = message;
-		const elapsedSec = ((Date.now() - this.startedAt) / 1000).toFixed(1);
-		super.setMessage(`${this.baseMessage} · ${elapsedSec}s`);
+		super.setMessage(`${this.baseMessage} · ${formatToolDuration(Date.now() - this.startedAt)}`);
 	}
 
 	override dispose(): void {
@@ -76,7 +75,7 @@ export class RetryStatusIndicator extends StatusIndicator {
 
 	constructor(ui: TUI, attempt: number, maxAttempts: number, delayMs: number) {
 		const retryMessage = (seconds: number) =>
-			`Retrying (${attempt}/${maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
+			`Retrying (${attempt}/${maxAttempts}) in ${formatCountdownSeconds(seconds)}... (${keyText("app.interrupt")} to cancel)`;
 		super(
 			"retry",
 			ui,

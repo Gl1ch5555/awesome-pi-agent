@@ -382,11 +382,18 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				maxRetries: 0,
 			};
 			const { data: openaiStream, response } = await retryProviderRequest(
-				() => client.chat.completions.create(params, requestOptions).withResponse(),
+				({ isRetry }) =>
+					client.chat.completions
+						.create(params, {
+							...requestOptions,
+							...(isRetry ? { headers: { Connection: "close" } } : {}),
+						})
+						.withResponse(),
 				{
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
+					transportRetries: options?.maxRetries ?? 2,
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -1093,9 +1100,13 @@ function buildParams(
 			if (typeof effort === "string") {
 				const normalized = effort.toLowerCase();
 				const isProOrV4 = /gemini-(?:4|3(?:\.\d+)?-pro)/i.test(model.id);
+				const supportsXHigh =
+					model.thinkingLevelMap?.xhigh === "xhigh" || /gemini-4-hydrogen/i.test(model.id);
 				const googleLevel =
 					normalized === "xhigh" || normalized === "max"
-						? "HIGH"
+						? supportsXHigh
+							? "XHIGH"
+							: "HIGH"
 						: normalized === "minimal" && isProOrV4
 							? "LOW"
 							: normalized === "minimal" ||

@@ -3,6 +3,7 @@ import {
 	type GenerateContentParameters,
 	GoogleGenAI,
 	type HttpOptions,
+	type PartialArg,
 	ResourceScope,
 	type ThinkingConfig,
 } from "@google/genai";
@@ -66,6 +67,99 @@ const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 // Counter for generating unique tool call IDs
 let toolCallCounter = 0;
 
+type JsonPathSegment = string | number;
+
+function parseGoogleJsonPath(jsonPath: string): { segments: JsonPathSegment[]; emptyInit?: "array" | "object" } {
+	let path = jsonPath.trim();
+	let emptyInit: "array" | "object" | undefined;
+	if (path.endsWith("[]")) {
+		emptyInit = "array";
+		path = path.slice(0, -2);
+	} else if (path.endsWith("{}")) {
+		emptyInit = "object";
+		path = path.slice(0, -2);
+	}
+	if (path.startsWith("$")) path = path.slice(1);
+	const segments: JsonPathSegment[] = [];
+	let i = 0;
+	while (i < path.length) {
+		if (path[i] === ".") {
+			i++;
+			let end = i;
+			while (end < path.length && path[end] !== "." && path[end] !== "[") end++;
+			if (end > i) segments.push(path.slice(i, end));
+			i = end;
+		} else if (path[i] === "[") {
+			const closeIdx = path.indexOf("]", i + 1);
+			if (closeIdx === -1) break;
+			const inner = path.slice(i + 1, closeIdx).trim();
+			if ((inner.startsWith("'") && inner.endsWith("'")) || (inner.startsWith('"') && inner.endsWith('"'))) {
+				segments.push(inner.slice(1, -1));
+			} else {
+				const num = Number.parseInt(inner, 10);
+				if (Number.isInteger(num) && num >= 0) segments.push(num);
+			}
+			i = closeIdx + 1;
+		} else {
+			let end = i;
+			while (end < path.length && path[end] !== "." && path[end] !== "[") end++;
+			if (end > i) segments.push(path.slice(i, end));
+			i = end;
+		}
+	}
+	return { segments, emptyInit };
+}
+
+function applyGooglePartialArgs(
+	target: Record<string, any>,
+	partialArgs: readonly PartialArg[],
+): { delta: string; arguments: Record<string, any> } {
+	const root: Record<string, any> = { ...target };
+	let delta = "";
+
+	for (const arg of partialArgs) {
+		if (!arg.jsonPath) continue;
+		const { segments, emptyInit } = parseGoogleJsonPath(arg.jsonPath);
+		if (segments.length === 0) continue;
+
+		let curr: any = root;
+		for (let i = 0; i < segments.length - 1; i++) {
+			const seg = segments[i]!;
+			const nextSeg = segments[i + 1]!;
+			if (curr[seg] === undefined || curr[seg] === null || typeof curr[seg] !== "object") {
+				curr[seg] = typeof nextSeg === "number" ? [] : {};
+			} else {
+				curr[seg] = Array.isArray(curr[seg]) ? [...curr[seg]] : { ...curr[seg] };
+			}
+			curr = curr[seg];
+		}
+
+		const lastSeg = segments[segments.length - 1]!;
+		if (emptyInit === "array") {
+			if (!Array.isArray(curr[lastSeg])) curr[lastSeg] = [];
+		} else if (emptyInit === "object") {
+			if (typeof curr[lastSeg] !== "object" || curr[lastSeg] === null || Array.isArray(curr[lastSeg])) {
+				curr[lastSeg] = {};
+			}
+		} else if (arg.stringValue !== undefined) {
+			const prev = typeof curr[lastSeg] === "string" ? curr[lastSeg] : "";
+			curr[lastSeg] = prev + arg.stringValue;
+			delta += arg.stringValue;
+		} else if (arg.numberValue !== undefined) {
+			curr[lastSeg] = arg.numberValue;
+			delta += String(arg.numberValue);
+		} else if (arg.boolValue !== undefined) {
+			curr[lastSeg] = arg.boolValue;
+			delta += String(arg.boolValue);
+		} else if (arg.nullValue !== undefined) {
+			curr[lastSeg] = null;
+			delta += "null";
+		}
+	}
+
+	return { delta, arguments: root };
+}
+
 export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 	model: Model<"google-vertex">,
 	context: TranscriptContext,
@@ -116,8 +210,19 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 
 			stream.push({ type: "start", partial: output });
 			let currentBlock: TextContent | ThinkingContent | null = null;
+			let activeToolCall: { block: ToolCall; index: number } | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			const finishActiveToolCall = () => {
+				if (!activeToolCall) return;
+				stream.push({
+					type: "toolcall_end",
+					contentIndex: activeToolCall.index,
+					toolCall: activeToolCall.block,
+					partial: output,
+				});
+				activeToolCall = null;
+			};
 			for await (const chunk of googleStream) {
 				await options?.onProviderStreamEvent?.(chunk, model);
 				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
@@ -127,6 +232,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				if (candidate?.content?.parts) {
 					for (const part of candidate.content.parts) {
 						if (part.text !== undefined) {
+							finishActiveToolCall();
 							const isThinking = isThinkingPart(part);
 							if (
 								!currentBlock ||
@@ -207,6 +313,37 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 								currentBlock = null;
 							}
 
+							const hasPartialArgs = Array.isArray(part.functionCall.partialArgs) && part.functionCall.partialArgs.length > 0;
+							const isStreamingCall = hasPartialArgs || part.functionCall.willContinue === true;
+
+							if (activeToolCall && (!part.functionCall.name || part.functionCall.name === activeToolCall.block.name) && (isStreamingCall || (!part.functionCall.args && part.functionCall.willContinue !== true))) {
+								if (part.thoughtSignature) {
+									activeToolCall.block.thoughtSignature = retainThoughtSignature(
+										activeToolCall.block.thoughtSignature,
+										part.thoughtSignature,
+									);
+								}
+								if (hasPartialArgs) {
+									const applied = applyGooglePartialArgs(
+										activeToolCall.block.arguments,
+										part.functionCall.partialArgs!,
+									);
+									activeToolCall.block.arguments = applied.arguments;
+									stream.push({
+										type: "toolcall_delta",
+										contentIndex: activeToolCall.index,
+										delta: applied.delta,
+										partial: output,
+									});
+								}
+								if (part.functionCall.willContinue !== true) {
+									finishActiveToolCall();
+								}
+								continue;
+							}
+
+							finishActiveToolCall();
+
 							const providedId = part.functionCall.id;
 							const needsNewId =
 								!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
@@ -214,23 +351,51 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 								? `${part.functionCall.name}_${Date.now()}_${++toolCallCounter}`
 								: providedId;
 
-							const toolCall: ToolCall = {
-								type: "toolCall",
-								id: toolCallId,
-								name: part.functionCall.name || "",
-								arguments: (part.functionCall.args as Record<string, any>) ?? {},
-								...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
-							};
+							if (isStreamingCall) {
+								const initialArgs = hasPartialArgs
+									? applyGooglePartialArgs({}, part.functionCall.partialArgs!)
+									: { delta: "", arguments: (part.functionCall.args as Record<string, any>) ?? {} };
+								const toolCall: ToolCall = {
+									type: "toolCall",
+									id: toolCallId,
+									name: part.functionCall.name || "",
+									arguments: initialArgs.arguments,
+									...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
+								};
+								output.content.push(toolCall);
+								const idx = blockIndex();
+								activeToolCall = { block: toolCall, index: idx };
+								stream.push({ type: "toolcall_start", contentIndex: idx, partial: output });
+								if (initialArgs.delta) {
+									stream.push({
+										type: "toolcall_delta",
+										contentIndex: idx,
+										delta: initialArgs.delta,
+										partial: output,
+									});
+								}
+								if (part.functionCall.willContinue !== true) {
+									finishActiveToolCall();
+								}
+							} else {
+								const toolCall: ToolCall = {
+									type: "toolCall",
+									id: toolCallId,
+									name: part.functionCall.name || "",
+									arguments: (part.functionCall.args as Record<string, any>) ?? {},
+									...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
+								};
 
-							output.content.push(toolCall);
-							stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-							stream.push({
-								type: "toolcall_delta",
-								contentIndex: blockIndex(),
-								delta: JSON.stringify(toolCall.arguments),
-								partial: output,
-							});
-							stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+								output.content.push(toolCall);
+								stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+								stream.push({
+									type: "toolcall_delta",
+									contentIndex: blockIndex(),
+									delta: JSON.stringify(toolCall.arguments),
+									partial: output,
+								});
+								stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+							}
 						}
 					}
 				}
@@ -264,6 +429,8 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 					calculateCost(model, output.usage);
 				}
 			}
+
+			finishActiveToolCall();
 
 			if (currentBlock) {
 				if (currentBlock.type === "text") {
@@ -492,6 +659,11 @@ function buildParams(
 		currentTools.length > 0
 			? resolveGoogleFunctionCallingMode(currentTools, options.toolChoice, supportsStrictMode)
 			: undefined;
+	const supportsStreamToolArgs =
+		currentTools.length > 0 &&
+		usesGoogleThinkingLevel(model) &&
+		!model.id.includes("3.1-flash-lite") &&
+		functionCallingMode !== "NONE";
 	const systemInstruction = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
 	const config: GenerateContentConfig = {
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
@@ -499,8 +671,13 @@ function buildParams(
 		...(currentTools.length > 0 && {
 			tools: convertTools(currentTools, false, supportsStrictMode),
 		}),
-		...(functionCallingMode !== undefined && {
-			toolConfig: { functionCallingConfig: { mode: functionCallingMode } },
+		...((functionCallingMode !== undefined || supportsStreamToolArgs) && {
+			toolConfig: {
+				functionCallingConfig: {
+					...(functionCallingMode !== undefined ? { mode: functionCallingMode } : {}),
+					...(supportsStreamToolArgs ? { streamFunctionCallArguments: true } : {}),
+				},
+			},
 		}),
 		// Off for now, until we have evaluated the implications of the SDK's automatic continuation
 		// (extra requests and stream resumes inside the SDK). A CONTINUATION finish ends the turn as "length".
@@ -540,8 +717,9 @@ function getGoogleBudget(
 	level: ResolvedGoogleThinkingLevel,
 	customBudgets?: ThinkingBudgets,
 ): number {
-	if (customBudgets?.[level] !== undefined) {
-		return customBudgets[level]!;
+	const budgetLevel: keyof ThinkingBudgets = level === "xhigh" ? "high" : level;
+	if (customBudgets?.[budgetLevel] !== undefined) {
+		return customBudgets[budgetLevel]!;
 	}
 
 	if (model.id.includes("2.5-pro")) {
@@ -550,6 +728,7 @@ function getGoogleBudget(
 			low: 2048,
 			medium: 8192,
 			high: 32768,
+			xhigh: 32768,
 		};
 		return budgets[level];
 	}
@@ -560,6 +739,7 @@ function getGoogleBudget(
 			low: 2048,
 			medium: 8192,
 			high: 24576,
+			xhigh: 24576,
 		};
 		return budgets[level];
 	}
