@@ -787,7 +787,7 @@
         "enabled": {
           "type": "boolean",
           "description": "Auto-start the local Web UI server alongside the terminal TUI.",
-          "default": false
+          "default": true
         },
         "port": {
           "type": "number",

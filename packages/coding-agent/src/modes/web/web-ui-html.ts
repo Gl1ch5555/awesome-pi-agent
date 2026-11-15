@@ -250,7 +250,7 @@ function esc(s) {
 
 function renderMarkdown(text) {
   let out = esc(text || "");
-  out = out.replace(/\`\`\`([\\w-]*)\n([\\s\\S]*?)\`\`\`/g, (_, lang, code) => \`<pre><code>\${code}</code></pre>\`);
+  out = out.replace(/\`\`\`([\\w-]*)\\n([\\s\\S]*?)\`\`\`/g, (_, lang, code) => \`<pre><code>\${code}</code></pre>\`);
   out = out.replace(/\`([^\`]+)\`/g, "<code>$1</code>");
   out = out.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
   return out.split(/\\n\\n+/).map((p) => (p.startsWith("<pre>") ? p : \`<p>\${p.replace(/\\n/g, "<br>")}</p>\`)).join("");
@@ -445,7 +445,9 @@ es.onmessage = (ev) => {
   }
 };
 
-refreshState();
+refreshState().catch((err) => {
+  cwdBar.textContent = "Failed to load state: " + (err?.message || err);
+});
 </script>
 </body>
 </html>`;

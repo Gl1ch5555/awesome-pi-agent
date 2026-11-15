@@ -85,7 +85,7 @@ export const SETTINGS_DEFAULTS = {
 		reviewMode: "auto",
 	},
 	webUi: {
-		enabled: false,
+		enabled: true,
 		port: 30141,
 		host: "127.0.0.1",
 	},
