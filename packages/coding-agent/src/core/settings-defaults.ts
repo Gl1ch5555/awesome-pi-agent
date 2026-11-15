@@ -55,6 +55,7 @@ export const SETTINGS_DEFAULTS = {
 		anthropicExtraUsage: true,
 	},
 	codemode: {
+		enabled: false,
 		mode: "on",
 		inlineBudget: 3000,
 	},
@@ -78,6 +79,7 @@ export const SETTINGS_DEFAULTS = {
 	memory: {
 		reviewEnabled: true,
 		nudgeInterval: 10,
+		skillReviewMinToolCalls: 3,
 		reviewMode: "auto",
 	},
 	autoUpdate: "auto",

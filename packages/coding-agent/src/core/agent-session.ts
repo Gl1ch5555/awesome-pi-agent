@@ -522,6 +522,8 @@ export class AgentSession {
 
 	private _turnsSinceMemoryReview = 0;
 	private _memoryUsedInCurrentRun = false;
+	private _skillManagedInCurrentRun = false;
+	private _toolCallsInCurrentRun = 0;
 	private _memoryReviewAbortController: AbortController | undefined;
 	private _memoryReviewPromise: Promise<MemoryReviewResult> | undefined;
 	private _disposed = false;
@@ -1187,8 +1189,14 @@ export class AgentSession {
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
 		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
+		if (event.type === "tool_execution_start" && event.toolName !== "memory" && event.toolName !== "skill_manage") {
+			this._toolCallsInCurrentRun += 1;
+		}
 		if (event.type === "tool_execution_end" && !event.isError && event.toolName === "memory") {
 			this._memoryUsedInCurrentRun = true;
+		}
+		if (event.type === "tool_execution_end" && !event.isError && event.toolName === "skill_manage") {
+			this._skillManagedInCurrentRun = true;
 		}
 		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
 		if (this._nestedToolCalls) {
@@ -1985,6 +1993,8 @@ export class AgentSession {
 		// Foreground priority: preempt any background memory review before starting a live turn.
 		this._cancelBackgroundMemoryReview();
 		this._memoryUsedInCurrentRun = false;
+		this._skillManagedInCurrentRun = false;
+		this._toolCallsInCurrentRun = 0;
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -4603,7 +4613,8 @@ export class AgentSession {
 	private _maybeSpawnBackgroundMemoryReview(trigger: BeforeAgentStartTrigger, runAborted: boolean): void {
 		if (this._disposed || runAborted || trigger.messageType === "custom") return;
 		const settings = this.settingsManager.getMemorySettings();
-		if (!settings.reviewEnabled || settings.nudgeInterval <= 0) return;
+		if (!settings.reviewEnabled) return;
+		if (settings.nudgeInterval <= 0 && settings.skillReviewMinToolCalls <= 0) return;
 		if (!this.model || !this.getActiveToolNames().includes("memory")) return;
 
 		const lastAssistant = this._findLastAssistantMessage();
@@ -4612,13 +4623,16 @@ export class AgentSession {
 		}
 		if (!this.getLastAssistantText()) return;
 
-		if (this._memoryUsedInCurrentRun) {
+		if (this._memoryUsedInCurrentRun && this._skillManagedInCurrentRun) {
 			this._turnsSinceMemoryReview = 0;
 			return;
 		}
 
 		this._turnsSinceMemoryReview += 1;
-		if (this._turnsSinceMemoryReview < settings.nudgeInterval) {
+		const toolThresholdHit =
+			settings.skillReviewMinToolCalls > 0 && this._toolCallsInCurrentRun >= settings.skillReviewMinToolCalls;
+		const turnThresholdHit = settings.nudgeInterval > 0 && this._turnsSinceMemoryReview >= settings.nudgeInterval;
+		if (!toolThresholdHit && !turnThresholdHit) {
 			return;
 		}
 		this._turnsSinceMemoryReview = 0;
@@ -4671,10 +4685,13 @@ export class AgentSession {
 					: snapshot;
 				const llmMessages = convertToLlm(transformed);
 
+				const skillManageTool =
+					this._toolRegistry.get("skill_manage") ?? this.agent.state.tools.find((tool) => tool.name === "skill_manage");
 				const result = await runMemoryReview({
 					model: request.model,
 					messages: llmMessages,
 					memoryTool,
+					skillManageTool,
 					cwd: this._cwd,
 					agentDir: this.settingsManager.getAgentDir(),
 					reviewMode: reviewSettings.reviewMode,

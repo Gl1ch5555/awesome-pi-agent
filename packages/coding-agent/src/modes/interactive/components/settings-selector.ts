@@ -111,6 +111,7 @@ export interface SettingsConfig {
 	voice?: VoiceSettings;
 	search?: SearchSettings;
 	memory?: Required<MemorySettings>;
+	codemodeEnabled?: boolean;
 	autoUpdate?: AutoUpdateMode;
 	syncUser?: string;
 }
@@ -160,6 +161,7 @@ export interface SettingsCallbacks {
 	onOpenProviders?: () => void;
 	onOpenSync?: () => void;
 	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
+	onCodemodeEnabledChange?: (enabled: boolean) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -843,6 +845,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["5", "10", "20", "0"],
 			},
 			{
+				id: "codemode-enabled",
+				label: "Experimental Code Mode",
+				description: "Run JS scripts in sandbox to chain and parallelize tool calls in one step",
+				currentValue: config.codemodeEnabled ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "cloud-sync",
 				label: "Cloud sync (/sync)",
 				description: "Sync settings, API keys, models, skills, and plugins by login & password",
@@ -1112,6 +1121,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "memory-nudge-interval":
 						callbacks.onMemorySettingsChange?.({ nudgeInterval: parseInt(newValue, 10) });
+						break;
+					case "codemode-enabled":
+						callbacks.onCodemodeEnabledChange?.(newValue === "true");
 						break;
 					case "auto-update":
 						callbacks.onAutoUpdateChange?.(newValue as AutoUpdateMode);

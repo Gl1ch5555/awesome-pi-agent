@@ -8,11 +8,15 @@
 
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { renderDiff } from "../../../modes/interactive/components/diff.ts";
-import type { Theme } from "../../../modes/interactive/theme/theme.ts";
+import {
+	getLanguageFromPath,
+	highlightCode,
+	type Theme,
+} from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
 import type { EditToolDetails } from "../edit.ts";
 import { computeEditsDiff, type Edit, type EditDiffError, type EditDiffResult } from "../edit-diff.ts";
-import { renderToolPath, str } from "../render-utils.ts";
+import { normalizeDisplayText, renderToolPath, replaceTabs, str } from "../render-utils.ts";
 
 type EditPreview = EditDiffResult | EditDiffError;
 export type EditRenderState = {
@@ -80,9 +84,67 @@ function getRenderablePreviewInput(args: RenderableEditArgs | undefined): { path
 
 	return null;
 }
-function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd: string): string {
-	const pathDisplay = renderToolPath(str(args?.file_path ?? args?.path), theme, cwd);
-	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
+const EDIT_STREAM_PREVIEW_LINES = 12;
+const EDIT_GUTTER_MIN_WIDTH = 3;
+
+function getStreamingNewText(args: RenderableEditArgs | undefined): string | null {
+	if (!args) return null;
+	if (typeof args.newText === "string" && args.newText.length > 0) {
+		return args.newText;
+	}
+	if (Array.isArray(args.edits)) {
+		for (let i = args.edits.length - 1; i >= 0; i--) {
+			const candidate = args.edits[i]?.newText;
+			if (typeof candidate === "string" && candidate.length > 0) {
+				return candidate;
+			}
+		}
+	}
+	return null;
+}
+
+function formatEditCall(
+	args: RenderableEditArgs | undefined,
+	theme: Theme,
+	cwd: string,
+	isStreamingArgs = false,
+	streamingNewText: string | null = null,
+): string {
+	const rawPath = str(args?.file_path ?? args?.path);
+	const pathDisplay = renderToolPath(rawPath, theme, cwd);
+	let text = `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
+	if (!isStreamingArgs) {
+		return text;
+	}
+	if (!streamingNewText) {
+		return `${text} ${theme.fg("muted", "· streaming...")}`;
+	}
+	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+	const normalized = replaceTabs(normalizeDisplayText(streamingNewText));
+	const rawLines = lang ? highlightCode(normalized, lang) : normalized.split("\n");
+	let end = rawLines.length;
+	while (end > 0 && rawLines[end - 1] === "") end--;
+	const lines = rawLines.slice(0, end);
+	const totalLines = lines.length;
+	if (totalLines > 0) {
+		text += ` ${theme.fg("muted", `· editing ${totalLines} ${totalLines === 1 ? "line" : "lines"}...`)}`;
+	}
+	const startIndex = totalLines > EDIT_STREAM_PREVIEW_LINES ? totalLines - EDIT_STREAM_PREVIEW_LINES : 0;
+	const displayLines = lines.slice(startIndex);
+	const gutterWidth = Math.max(EDIT_GUTTER_MIN_WIDTH, String(totalLines).length);
+	text += "\n\n";
+	if (startIndex > 0) {
+		text += `${theme.fg("muted", `... (${startIndex} earlier lines, ${totalLines} total)`)}\n`;
+	}
+	text += displayLines
+		.map((line, idx) => {
+			const lineNum = String(startIndex + idx + 1).padStart(gutterWidth);
+			const body = lang ? line : theme.fg("toolOutput", line);
+			return `${theme.fg("dim", `${lineNum} │ `)}${body}`;
+		})
+		.join("\n");
+	text += `\n${theme.fg("dim", "… (streaming)")}`;
+	return text;
 }
 function formatEditResult(
 	args: RenderableEditArgs | undefined,
@@ -134,11 +196,13 @@ function buildEditCallComponent(
 	theme: Theme,
 	cwd: string,
 	outputPad: number,
+	isStreamingArgs = false,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.setPaddingX(outputPad);
 	component.clear();
-	component.addChild(new Text(formatEditCall(args, theme, cwd), 0, 0));
+	const streamingNewText = isStreamingArgs && !component.preview ? getStreamingNewText(args) : null;
+	component.addChild(new Text(formatEditCall(args, theme, cwd, isStreamingArgs && !component.preview, streamingNewText), 0, 0));
 
 	if (!component.preview) {
 		return component;
@@ -194,12 +258,14 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			});
 		}
 
+		const isStreamingArgs = context.isPartial && !context.argsComplete && !context.executionStarted;
 		return buildEditCallComponent(
 			component,
 			args as RenderableEditArgs | undefined,
 			theme,
 			context.cwd,
 			context.outputPad,
+			isStreamingArgs,
 		);
 	},
 	renderResult(result, _options, theme, context) {

@@ -759,6 +759,12 @@
           "description": "Completed user turns between automatic background memory reviews (0 disables periodic spawns).",
           "default": 10
         },
+        "skillReviewMinToolCalls": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum tool calls in a turn to trigger automatic background self-improvement review for memory & skills (0 disables tool-count trigger).",
+          "default": 3
+        },
         "reviewMode": {
           "anyOf": [
             {
@@ -800,6 +806,11 @@
     "codemode": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable Experimental Code Mode (activates the codemode sandbox tool so the model can run JS scripts to batch/parallelize tool calls).",
+          "default": false
+        },
         "mode": {
           "anyOf": [
             {

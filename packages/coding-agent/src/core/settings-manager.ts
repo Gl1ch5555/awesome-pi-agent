@@ -100,6 +100,7 @@ export const DEFAULT_TOOL_NAMES: readonly string[] = [
 	"edit",
 	"write",
 	"memory",
+	"skill_manage",
 	"web_search",
 	"web_fetch",
 ];
@@ -1593,15 +1594,38 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getCodemodeEnabled(): boolean {
+		const envVal = process.env.PI_EXPERIMENTAL_CODE_MODE ?? process.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE;
+		if (envVal !== undefined) {
+			const normalized = envVal.trim().toLowerCase();
+			if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") return true;
+			if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") return false;
+		}
+		return this.settings.codemode?.enabled ?? SETTINGS_DEFAULTS.codemode.enabled;
+	}
+
+	setCodemodeEnabled(enabled: boolean): void {
+		this.globalSettings.codemode ??= {};
+		this.globalSettings.codemode.enabled = enabled;
+		this.markModified("codemode", "enabled");
+		this.save();
+	}
+
 	getMemorySettings(): Required<MemorySettings> {
 		const rawInterval = this.settings.memory?.nudgeInterval;
 		const nudgeInterval =
 			typeof rawInterval === "number" && Number.isFinite(rawInterval) && rawInterval >= 0
 				? Math.floor(rawInterval)
 				: SETTINGS_DEFAULTS.memory.nudgeInterval;
+		const rawMinTools = this.settings.memory?.skillReviewMinToolCalls;
+		const skillReviewMinToolCalls =
+			typeof rawMinTools === "number" && Number.isFinite(rawMinTools) && rawMinTools >= 0
+				? Math.floor(rawMinTools)
+				: SETTINGS_DEFAULTS.memory.skillReviewMinToolCalls;
 		return {
 			reviewEnabled: this.settings.memory?.reviewEnabled ?? SETTINGS_DEFAULTS.memory.reviewEnabled,
 			nudgeInterval,
+			skillReviewMinToolCalls,
 			reviewMode: this.settings.memory?.reviewMode ?? SETTINGS_DEFAULTS.memory.reviewMode,
 		};
 	}
@@ -1615,6 +1639,10 @@ export class SettingsManager {
 		if (patch.nudgeInterval !== undefined) {
 			this.globalSettings.memory.nudgeInterval = Math.max(0, Math.floor(patch.nudgeInterval));
 			this.markModified("memory", "nudgeInterval");
+		}
+		if (patch.skillReviewMinToolCalls !== undefined) {
+			this.globalSettings.memory.skillReviewMinToolCalls = Math.max(0, Math.floor(patch.skillReviewMinToolCalls));
+			this.markModified("memory", "skillReviewMinToolCalls");
 		}
 		if (patch.reviewMode !== undefined) {
 			this.globalSettings.memory.reviewMode = patch.reviewMode;

@@ -3933,7 +3933,7 @@ export class InteractiveMode {
 
 			case "tool_execution_end": {
 				if (event.isError) this.maybeShowInstallChangeWarning();
-				if (!event.isError && event.toolName === "memory") {
+				if (!event.isError && (event.toolName === "memory" || event.toolName === "skill_manage")) {
 					this.triggerAutoSyncPush();
 				}
 				const component = this.pendingTools.get(event.toolCallId);
@@ -3971,7 +3971,8 @@ export class InteractiveMode {
 				if (event.saved) {
 					this.triggerAutoSyncPush();
 					if (event.background) {
-						this.showStatus("Memory review saved updates");
+						const summary = event.changes?.slice(0, 2).join("; ");
+						this.showStatus(summary ? `Self-improvement: ${summary}` : "Self-improvement review saved updates");
 					}
 				}
 				break;
@@ -5344,6 +5345,7 @@ export class InteractiveMode {
 					voice: this.settingsManager.getVoiceSettings(),
 					search: this.settingsManager.getSearchSettings(),
 					memory: this.settingsManager.getMemorySettings(),
+					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
 					autoUpdate: this.settingsManager.getAutoUpdate(),
 					syncUser: readSyncState()?.user,
 				},
@@ -5548,6 +5550,18 @@ export class InteractiveMode {
 					},
 					onMemorySettingsChange: (patch) => {
 						this.settingsManager.setMemorySettings(patch);
+						this.triggerAutoSyncPush();
+					},
+					onCodemodeEnabledChange: (enabled) => {
+						this.settingsManager.setCodemodeEnabled(enabled);
+						const active = this.session.getActiveToolNames();
+						const next = enabled
+							? active.includes("codemode")
+								? active
+								: [...active, "codemode"]
+							: active.filter((name) => name !== "codemode");
+						this.session.setActiveToolsByName(next);
+						this.showStatus(`Experimental Code Mode: ${enabled ? "on" : "off"}`);
 						this.triggerAutoSyncPush();
 					},
 					onAutoUpdateChange: (mode) => {

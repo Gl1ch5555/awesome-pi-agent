@@ -122,6 +122,11 @@ function buildRules(
 	for (const name of selectedTools) {
 		for (const rule of toolGuidelines[name] ?? []) addRule(rule);
 	}
+	if (selectedTools.includes("codemode")) {
+		addRule(
+			"Experimental Code Mode is enabled: for multi-step, parallel, or batch operations (scanning files, chaining read/edit/bash calls, or filtering large outputs), prefer codemode to run JavaScript via tools.* in one turn",
+		);
+	}
 	for (const rule of promptGuidelines) addRule(rule);
 	addRule("Be concise in your responses");
 	addRule("Show file paths clearly when working with files");

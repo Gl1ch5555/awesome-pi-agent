@@ -77,6 +77,11 @@ export {
 	type MemoryToolOptions,
 } from "./memory.ts";
 export {
+	createSkillManageToolDefinition,
+	type SkillManageToolDetails,
+	type SkillManageToolOptions,
+} from "./skill-manage.ts";
+export {
 	createWebFetchToolDefinition,
 	type WebFetchToolDetails,
 	type WebFetchToolOptions,
@@ -107,6 +112,7 @@ import { createFindTool, createFindToolDefinition, type FindToolOptions } from "
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createMemoryToolDefinition, type MemoryToolOptions } from "./memory.ts";
+import { createSkillManageToolDefinition, type SkillManageToolOptions } from "./skill-manage.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -126,6 +132,7 @@ export type ToolName =
 	| "find"
 	| "ls"
 	| "memory"
+	| "skill_manage"
 	| "web_search"
 	| "web_fetch";
 export const allToolNames: Set<ToolName> = new Set([
@@ -138,6 +145,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"find",
 	"ls",
 	"memory",
+	"skill_manage",
 	"web_search",
 	"web_fetch",
 ]);
@@ -152,6 +160,7 @@ export interface ToolsOptions {
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
 	memory?: MemoryToolOptions;
+	skillManage?: SkillManageToolOptions;
 	webSearch?: WebSearchToolOptions;
 	webFetch?: WebFetchToolOptions;
 }
@@ -176,6 +185,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "memory":
 			return createMemoryToolDefinition(cwd, options?.memory);
+		case "skill_manage":
+			return createSkillManageToolDefinition(options?.skillManage);
 		case "web_search":
 			return createWebSearchToolDefinition(options?.webSearch);
 		case "web_fetch":
@@ -205,6 +216,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "memory":
 			return wrapToolDefinition(createMemoryToolDefinition(cwd, options?.memory));
+		case "skill_manage":
+			return wrapToolDefinition(createSkillManageToolDefinition(options?.skillManage));
 		case "web_search":
 			return wrapToolDefinition(createWebSearchToolDefinition(options?.webSearch));
 		case "web_fetch":
@@ -243,6 +256,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		memory: createMemoryToolDefinition(cwd, options?.memory),
+		skill_manage: createSkillManageToolDefinition(options?.skillManage),
 		web_search: createWebSearchToolDefinition(options?.webSearch),
 		web_fetch: createWebFetchToolDefinition(options?.webFetch),
 	};
@@ -277,6 +291,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		memory: wrapToolDefinition(createMemoryToolDefinition(cwd, options?.memory)),
+		skill_manage: wrapToolDefinition(createSkillManageToolDefinition(options?.skillManage)),
 		web_search: wrapToolDefinition(createWebSearchToolDefinition(options?.webSearch)),
 		web_fetch: wrapToolDefinition(createWebFetchToolDefinition(options?.webFetch)),
 	};

@@ -226,6 +226,14 @@ const MemorySettingsSchema = Type.Object({
 			default: SETTINGS_DEFAULTS.memory.nudgeInterval,
 		}),
 	),
+	skillReviewMinToolCalls: Type.Optional(
+		Type.Number({
+			minimum: 0,
+			description:
+				"Minimum tool calls in a turn to trigger automatic background self-improvement review for memory & skills (0 disables tool-count trigger).",
+			default: SETTINGS_DEFAULTS.memory.skillReviewMinToolCalls,
+		}),
+	),
 	reviewMode: Type.Optional(
 		Type.Union([Type.Literal("auto"), Type.Literal("digest")], {
 			description:
@@ -246,6 +254,13 @@ function codemodeMode(options?: TSchemaOptions) {
 const CodemodeModeSchema = codemodeMode();
 
 const CodemodeSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description:
+				"Enable Experimental Code Mode (activates the codemode sandbox tool so the model can run JS scripts to batch/parallelize tool calls).",
+			default: SETTINGS_DEFAULTS.codemode.enabled,
+		}),
+	),
 	mode: Type.Optional(
 		codemodeMode({
 			description:

@@ -20,13 +20,14 @@ const MAX_REVIEW_ITERATIONS = 4;
 const DIGEST_TAIL_MESSAGES = 24;
 
 const DIGEST_REVIEW_SYSTEM_PROMPT =
-	"You are a background memory reviewer. Inspect the conversation and save only durable, grounded facts via the `memory` tool. If nothing is worth saving, reply 'Nothing to save.' and stop.";
+	"You are a background self-improvement reviewer. Inspect the conversation and save only durable, grounded facts via `memory` or reusable procedures/pitfalls via `skill_manage`. If nothing is worth saving, reply 'Nothing to save.' and stop.";
 
 export function buildMemoryReviewPrompt(options: {
 	cwd: string;
 	agentDir: string;
 	focus?: string;
 	includeSnapshot?: boolean;
+	allowSkillManage?: boolean;
 }): string {
 	const routingBlock = [
 		"THREE distinct stores — pick the right one for each fact:",
@@ -39,10 +40,21 @@ export function buildMemoryReviewPrompt(options: {
 		"Save only facts GROUNDED in this conversation — a user message or tool result you can point to. Never infer the user's traits, skill level, role, mood or preferences from topic, tone or tools used, and never turn a one-off request into a standing preference unless the user marked it general ('always', 'from now on', 'remember', 'всегда', 'запомни') or stated a standing like/dislike. Write entries as declarative facts ('User prefers concise responses'), not directives ('Always respond concisely'), with no dates or session logs.",
 	].join("\n");
 
+	const allowedList = options.allowSkillManage ? "`memory` and `skill_manage`" : "`memory`";
+	const skillBlock = options.allowSkillManage
+		? [
+				"",
+				"SKILLS (`skill_manage` tool):",
+				"  • If the conversation worked out a non-trivial multi-step workflow, fix, or non-obvious pitfall worth reusing across sessions, save or update a skill via `skill_manage` (patch an existing skill first if one matches, or create a concise new one).",
+				"  • Keep skills actionable (imperative rules + why + verified commands), with no session dates or logs.",
+			].join("\n")
+		: "";
+
 	const parts = [
-		"Review the conversation above and update persistent memory only if something genuinely durable stands out.",
+		"Review the conversation above and update persistent memory/skills only if something genuinely durable stands out.",
 		"",
 		routingBlock,
+		...(skillBlock ? [skillBlock] : []),
 	];
 
 	if (options.includeSnapshot) {
@@ -56,7 +68,7 @@ export function buildMemoryReviewPrompt(options: {
 
 	parts.push(
 		"",
-		"You may ONLY call the `memory` tool during this review (other tools are disabled). Consolidate stale entries only if near the character budget. If nothing is worth saving, just say 'Nothing to save.' and stop without calling any tool.",
+		`You may ONLY call ${allowedList} during this review (other tools are disabled). Consolidate stale entries only if near the character budget. If nothing is worth saving, just say 'Nothing to save.' and stop without calling any tool.`,
 	);
 
 	return parts.join("\n");
@@ -140,6 +152,7 @@ export interface RunMemoryReviewOptions {
 	model: Model<any>;
 	messages: readonly Message[];
 	memoryTool: AgentTool<any>;
+	skillManageTool?: AgentTool<any>;
 	cwd: string;
 	agentDir: string;
 	reviewMode: MemoryReviewMode;
@@ -199,6 +212,7 @@ export async function runMemoryReview(options: RunMemoryReviewOptions): Promise<
 					agentDir: options.agentDir,
 					focus: options.focus,
 					includeSnapshot: !useCachedPrefix,
+					allowSkillManage: Boolean(options.skillManageTool),
 				}),
 			},
 		],
@@ -213,7 +227,10 @@ export async function runMemoryReview(options: RunMemoryReviewOptions): Promise<
 		workingMessages = [...options.messages, reviewUserMessage];
 	} else {
 		digestSystemPrompt = DIGEST_REVIEW_SYSTEM_PROMPT;
-		digestTools = [toMemoryToolDeclaration(options.memoryTool)];
+		digestTools = [
+			toMemoryToolDeclaration(options.memoryTool),
+			...(options.skillManageTool ? [toMemoryToolDeclaration(options.skillManageTool)] : []),
+		];
 		workingMessages = [...buildDigestMessages(options.messages), reviewUserMessage];
 	}
 
@@ -298,12 +315,21 @@ export async function runMemoryReview(options: RunMemoryReviewOptions): Promise<
 		for (const toolCall of toolCalls) {
 			let resultText: string;
 			let isError = false;
-			if (toolCall.name !== options.memoryTool.name) {
+			const targetTool =
+				toolCall.name === options.memoryTool.name
+					? options.memoryTool
+					: options.skillManageTool && toolCall.name === options.skillManageTool.name
+						? options.skillManageTool
+						: undefined;
+			if (!targetTool) {
 				isError = true;
-				resultText = `Background memory review denied non-whitelisted tool "${toolCall.name}". Only "${options.memoryTool.name}" is allowed here.`;
+				const allowed = options.skillManageTool
+					? `"${options.memoryTool.name}", "${options.skillManageTool.name}"`
+					: `"${options.memoryTool.name}"`;
+				resultText = `Background review denied non-whitelisted tool "${toolCall.name}". Only ${allowed} allowed here.`;
 			} else {
 				try {
-					const toolResult = await options.memoryTool.execute(toolCall.id, toolCall.arguments, options.signal);
+					const toolResult = await targetTool.execute(toolCall.id, toolCall.arguments, options.signal);
 					const text = toolResult.content
 						.filter((c) => c.type === "text")
 						.map((c) => c.text)

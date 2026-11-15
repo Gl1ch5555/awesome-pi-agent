@@ -292,6 +292,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const excludedToolNames = options.excludeTools;
 	const isExcludedTool = excludedToolNames ? createToolNameMatcher(excludedToolNames) : undefined;
 	const initialActiveToolNames = (selectedToolNames ?? defaultToolNames).filter((name) => !isExcludedTool?.(name));
+	if (
+		!options.noTools &&
+		!options.tools &&
+		settingsManager.getCodemodeEnabled() &&
+		!isExcludedTool?.("codemode") &&
+		!initialActiveToolNames.includes("codemode")
+	) {
+		initialActiveToolNames.push("codemode");
+	}
 
 	// Create convertToLlm wrapper that filters images if blockImages is enabled (defense-in-depth)
 	const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {

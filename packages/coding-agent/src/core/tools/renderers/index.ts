@@ -15,6 +15,7 @@ import { grepRenderers } from "./grep.ts";
 import { lsRenderers } from "./ls.ts";
 import { memoryRenderers } from "./memory.ts";
 import { readRenderers } from "./read.ts";
+import { skillManageRenderers } from "./skill-manage.ts";
 import { webFetchRenderers, webSearchRenderers } from "./web.ts";
 import { writeRenderers } from "./write.ts";
 
@@ -28,6 +29,7 @@ export {
 	lsRenderers,
 	memoryRenderers,
 	readRenderers,
+	skillManageRenderers,
 	webFetchRenderers,
 	webSearchRenderers,
 	writeRenderers,
@@ -45,6 +47,7 @@ export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 		find: findRenderers,
 		ls: lsRenderers,
 		memory: memoryRenderers,
+		skill_manage: skillManageRenderers,
 		web_search: webSearchRenderers,
 		web_fetch: webFetchRenderers,
 	};
