@@ -635,17 +635,27 @@ export class PiWebServer {
 			const body = await this.readJsonBody(req);
 			const provider = typeof body.provider === "string" ? body.provider : "";
 			const id = typeof body.id === "string" ? body.id : "";
-			const target = this.session.modelRuntime
-				.getAvailableSnapshot()
-				.find((m) => m.provider === provider && m.id === id);
+			const target =
+				this.session.scopedModels
+					.map((s) => s.model)
+					.find((m) => m.provider === provider && m.id === id) ??
+				this.session.modelRuntime
+					.getAvailableSnapshot()
+					.find((m) => m.provider === provider && m.id === id);
 			if (!target) {
 				this.sendJson(res, 404, { error: "Model not found" });
 				return;
 			}
-			await this.session.setModel(target, { persist: true });
+			try {
+				await this.session.setModel(target, { persist: true });
+			} catch (err) {
+				this.sendJson(res, 400, { error: err instanceof Error ? err.message : String(err) });
+				return;
+			}
 			this.onStateChange?.();
 			this.triggerBackgroundSync();
-			this.sendJson(res, 200, { ok: true });
+			this.broadcastRaw({ type: "session_changed" });
+			this.sendJson(res, 200, { ok: true, model: { provider: target.provider, id: target.id } });
 			return;
 		}
 
