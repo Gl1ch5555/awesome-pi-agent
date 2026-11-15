@@ -4,8 +4,10 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ContextUsage } from "../../../core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
+import type { TuiStyle } from "../../../core/settings-manager.ts";
 import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
+import type { EditorBorderMetadata } from "./custom-editor.ts";
 
 /**
  * Sanitize text for display in a single-line status.
@@ -61,6 +63,7 @@ interface SessionStats {
  */
 export class FooterComponent implements Component {
 	private autoCompactEnabled = true;
+	private tuiStyle: TuiStyle = "native";
 	private session: AgentSession;
 	private footerData: ReadonlyFooterDataProvider;
 	private sessionStats?: SessionStats;
@@ -68,6 +71,46 @@ export class FooterComponent implements Component {
 	constructor(session: AgentSession, footerData: ReadonlyFooterDataProvider) {
 		this.session = session;
 		this.footerData = footerData;
+	}
+
+	setTuiStyle(style: TuiStyle): void {
+		this.tuiStyle = style;
+	}
+
+	getEditorBorderMetadata(): EditorBorderMetadata {
+		const state = this.session.state;
+		const { contextUsage } = this.getSessionStats();
+		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
+		const contextPercentValue = contextUsage?.percent ?? 0;
+		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+
+		let pwd = formatCwdForFooter(this.session.sessionManager.getCwd(), process.env.HOME || process.env.USERPROFILE);
+		const branch = this.footerData.getGitBranch();
+		if (branch) pwd = `${pwd} (${branch})`;
+
+		const modelName = state.model?.id || "no-model";
+		let modelLabel = modelName;
+		if (state.model?.reasoning) {
+			const lvl = state.thinkingLevel || "off";
+			modelLabel = lvl === "off" ? `${modelName} • thinking off` : `${modelName} • ${lvl}`;
+		}
+
+		const ctxRaw =
+			contextPercent === "?"
+				? `?/${formatTokens(contextWindow)}`
+				: `${contextPercent}%/${formatTokens(contextWindow)}`;
+		const ctxStyled =
+			contextPercentValue > 90
+				? theme.fg("error", ctxRaw)
+				: contextPercentValue > 70
+					? theme.fg("warning", ctxRaw)
+					: theme.fg("muted", ctxRaw);
+
+		return {
+			rightTop: theme.fg("dim", pwd),
+			leftBottom: theme.fg("muted", modelLabel),
+			rightBottom: ctxStyled,
+		};
 	}
 
 	setSession(session: AgentSession): void {
@@ -277,7 +320,21 @@ export class FooterComponent implements Component {
 		const dimRemainder = theme.fg("dim", remainder);
 
 		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+		let lines: string[];
+		if (this.tuiStyle === "rounded" || this.tuiStyle === "compact") {
+			// CWD, model, and context% are embedded in the editor border; keep footer ultra-compact.
+			const compactStats = statsParts.slice(0, -1).join(" ");
+			lines = compactStats ? [truncateToWidth(theme.fg("dim", compactStats), width, theme.fg("dim", "..."))] : [];
+		} else if (this.tuiStyle === "sageveil") {
+			const pill = `${theme.bg("selectedBg", theme.fg("accent", " π "))} ${theme.fg("text", pwd)}`;
+			const topRow =
+				visibleWidth(pill) + 2 + visibleWidth(rightSide) <= width
+					? `${pill}${" ".repeat(width - visibleWidth(pill) - visibleWidth(rightSide))}${theme.fg("muted", rightSide)}`
+					: truncateToWidth(pill, width, theme.fg("dim", "..."));
+			lines = [topRow, dimStatsLeft];
+		} else {
+			lines = [pwdLine, dimStatsLeft + dimRemainder];
+		}
 
 		// Add extension statuses on a single line, sorted by key alphabetically
 		const extensionStatuses = this.footerData.getExtensionStatuses();

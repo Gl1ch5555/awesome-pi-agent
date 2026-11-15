@@ -28,6 +28,7 @@ import type {
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
+	TuiStyle,
 	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
@@ -59,6 +60,7 @@ export type {
 	ThinkingBudgetsSettings,
 	TransportSetting,
 	TuiMode,
+	TuiStyle,
 	VoiceSettings,
 	WarningSettings,
 } from "./settings-schema.ts";
@@ -1591,6 +1593,16 @@ export class SettingsManager {
 			this.globalSettings.search.googleCseId = extras.googleCseId.trim() || undefined;
 			this.markModified("search", "googleCseId");
 		}
+		this.save();
+	}
+
+	getTuiStyle(): TuiStyle {
+		return this.settings.tuiStyle ?? SETTINGS_DEFAULTS.tuiStyle;
+	}
+
+	setTuiStyle(style: TuiStyle): void {
+		this.globalSettings.tuiStyle = style;
+		this.markModified("tuiStyle");
 		this.save();
 	}
 

@@ -695,16 +695,20 @@ export class InteractiveMode {
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
+		const tuiStyle = this.settingsManager.getTuiStyle();
 		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
 			paddingX: editorPaddingX,
 			autocompleteMaxVisible,
 			embedWorkingStatus: true,
+			tuiStyle,
 		});
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
 		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
+		this.footer.setTuiStyle(tuiStyle);
+		this.defaultEditor.setBorderMetadataProvider(() => this.footer.getEditorBorderMetadata());
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
 		this.footerContainer.addChild(this.footer);
@@ -5346,6 +5350,7 @@ export class InteractiveMode {
 					search: this.settingsManager.getSearchSettings(),
 					memory: this.settingsManager.getMemorySettings(),
 					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
+					tuiStyle: this.settingsManager.getTuiStyle(),
 					autoUpdate: this.settingsManager.getAutoUpdate(),
 					syncUser: readSyncState()?.user,
 				},
@@ -5562,6 +5567,15 @@ export class InteractiveMode {
 							: active.filter((name) => name !== "codemode");
 						this.session.setActiveToolsByName(next);
 						this.showStatus(`Experimental Code Mode: ${enabled ? "on" : "off"}`);
+						this.triggerAutoSyncPush();
+					},
+					onTuiStyleChange: (style) => {
+						this.settingsManager.setTuiStyle(style);
+						this.defaultEditor.setTuiStyle(style);
+						this.footer.setTuiStyle(style);
+						this.footer.invalidate();
+						this.ui.requestRender();
+						this.showStatus(`TUI style: ${style}`);
 						this.triggerAutoSyncPush();
 					},
 					onAutoUpdateChange: (mode) => {

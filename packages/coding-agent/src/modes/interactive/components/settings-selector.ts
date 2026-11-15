@@ -28,6 +28,7 @@ import {
 	type SearchSettings,
 	type SessionShareDestination,
 	type TuiMode,
+	type TuiStyle,
 	type VoiceSettings,
 	type WarningSettings,
 } from "../../../core/settings-manager.ts";
@@ -112,6 +113,7 @@ export interface SettingsConfig {
 	search?: SearchSettings;
 	memory?: Required<MemorySettings>;
 	codemodeEnabled?: boolean;
+	tuiStyle?: TuiStyle;
 	autoUpdate?: AutoUpdateMode;
 	syncUser?: string;
 }
@@ -162,6 +164,7 @@ export interface SettingsCallbacks {
 	onOpenSync?: () => void;
 	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
 	onCodemodeEnabledChange?: (enabled: boolean) => void;
+	onTuiStyleChange?: (style: TuiStyle) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -873,6 +876,13 @@ export class SettingsSelectorComponent extends Container {
 				submenu: (currentValue, done) =>
 					new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
 			},
+			{
+				id: "tui-style",
+				label: "TUI style",
+				description: "Editor & footer layout preset (instant switch)",
+				currentValue: config.tuiStyle ?? SETTINGS_DEFAULTS.tuiStyle,
+				values: ["native", "rounded", "compact", "opentui", "sageveil"],
+			},
 		];
 
 		// Only show image toggle if terminal supports it
@@ -1124,6 +1134,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "codemode-enabled":
 						callbacks.onCodemodeEnabledChange?.(newValue === "true");
+						break;
+					case "tui-style":
+						callbacks.onTuiStyleChange?.(newValue as TuiStyle);
 						break;
 					case "auto-update":
 						callbacks.onAutoUpdateChange?.(newValue as AutoUpdateMode);

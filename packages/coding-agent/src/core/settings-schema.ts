@@ -207,6 +207,19 @@ const SearchSettingsSchema = Type.Object({
 	googleCseId: Type.Optional(Type.String({ description: "Google Custom Search Engine ID (cx)." })),
 });
 
+const TuiStyleSchema = Type.Union(
+	[
+		Type.Literal("native"),
+		Type.Literal("rounded"),
+		Type.Literal("compact"),
+		Type.Literal("opentui"),
+		Type.Literal("sageveil"),
+	],
+	{
+		description: "Interactive TUI layout preset: native, rounded, compact, opentui, or sageveil.",
+	},
+);
+
 const MemoryReviewModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("digest")], {
 	description:
 		'Context strategy for background memory review: "auto" replays the session prefix (warm prompt cache), "digest" collapses older turns into a compact summary.',
@@ -547,6 +560,7 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.tuiMode,
 			}),
 		),
+		tuiStyle: Type.Optional(TuiStyleSchema),
 		fullscreenExitOutput: Type.Optional(
 			Type.Union([Type.Literal("transcript"), Type.Literal("resume-hint")], {
 				description: "No effect in regular TUI mode.",
@@ -601,6 +615,7 @@ export type VoiceModel = NonNullable<Static<typeof VoiceSettingsSchema>["model"]
 export interface VoiceSettings extends Static<typeof VoiceSettingsSchema> {}
 export type SearchProviderId = Static<typeof SearchProviderSchema>;
 export interface SearchSettings extends Static<typeof SearchSettingsSchema> {}
+export type TuiStyle = Static<typeof TuiStyleSchema>;
 export type MemoryReviewMode = Static<typeof MemoryReviewModeSchema>;
 export interface MemorySettings extends Static<typeof MemorySettingsSchema> {}
 export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;

@@ -898,6 +898,31 @@
       ],
       "default": "fullscreen"
     },
+    "tuiStyle": {
+      "anyOf": [
+        {
+          "type": "string",
+          "const": "native"
+        },
+        {
+          "type": "string",
+          "const": "rounded"
+        },
+        {
+          "type": "string",
+          "const": "compact"
+        },
+        {
+          "type": "string",
+          "const": "opentui"
+        },
+        {
+          "type": "string",
+          "const": "sageveil"
+        }
+      ],
+      "description": "Interactive TUI layout preset: native, rounded, compact, opentui, or sageveil."
+    },
     "fullscreenExitOutput": {
       "anyOf": [
         {

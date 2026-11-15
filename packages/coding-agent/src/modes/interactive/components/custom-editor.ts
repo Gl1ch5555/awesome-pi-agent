@@ -7,14 +7,23 @@ import {
 	isKittyProtocolActive,
 	matchesKey,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
+import type { TuiStyle } from "../../../core/settings-manager.ts";
 import type { StatusIndicator } from "./status-indicator.ts";
+
+export interface EditorBorderMetadata {
+	rightTop?: string;
+	leftBottom?: string;
+	rightBottom?: string;
+}
 
 export type CustomEditorOptions = EditorOptions & {
 	/** Render working, compaction, summarization, and retry status in the editor's top border. */
 	embedWorkingStatus?: boolean;
+	tuiStyle?: TuiStyle;
 };
 
 /**
@@ -24,6 +33,9 @@ export class CustomEditor extends Editor {
 	private keybindings: KeybindingsManager;
 	private workingStatusIndicator: StatusIndicator | undefined;
 	public readonly embedWorkingStatus: boolean;
+	private tuiStyle: TuiStyle;
+	private borderMetaProvider?: () => EditorBorderMetadata;
+	private lastRenderedBottomBorder = "";
 	public actionHandlers: Map<AppKeybinding, () => void> = new Map();
 
 	// Special handlers that can be dynamically replaced
@@ -48,7 +60,16 @@ export class CustomEditor extends Editor {
 		super(tui, theme, options);
 		this.keybindings = keybindings;
 		this.embedWorkingStatus = options?.embedWorkingStatus ?? false;
+		this.tuiStyle = options?.tuiStyle ?? "native";
 		this.wantsKeyRelease = true;
+	}
+
+	setTuiStyle(style: TuiStyle): void {
+		this.tuiStyle = style;
+	}
+
+	setBorderMetadataProvider(provider: (() => EditorBorderMetadata) | undefined): void {
+		this.borderMetaProvider = provider;
 	}
 
 	setVoiceHoldEnabled(enabled: boolean): void {
@@ -116,7 +137,52 @@ export class CustomEditor extends Editor {
 		this.workingStatusIndicator = indicator;
 	}
 
+	private buildLabeledBorder(
+		width: number,
+		leftCorner: string,
+		rightCorner: string,
+		leftLabel?: string,
+		rightLabel?: string,
+	): string {
+		const cornerW = visibleWidth(leftCorner) + visibleWidth(rightCorner);
+		const innerWidth = Math.max(0, width - cornerW);
+		if (innerWidth === 0) {
+			return this.borderColor(truncateToWidth(`${leftCorner}${rightCorner}`, width, ""));
+		}
+
+		const leftPart = leftLabel ? ` ${leftLabel} ` : "";
+		const rightPart = rightLabel ? ` ${rightLabel} ` : "";
+		let leftW = visibleWidth(leftPart);
+		let rightW = visibleWidth(rightPart);
+
+		let effLeft = leftPart;
+		let effRight = rightPart;
+		if (leftW + rightW > innerWidth) {
+			if (leftW > 0 && rightW > 0) {
+				const maxLeft = Math.max(0, Math.floor(innerWidth * 0.55));
+				effLeft = truncateToWidth(effLeft, maxLeft, "");
+				leftW = visibleWidth(effLeft);
+				effRight = truncateToWidth(effRight, Math.max(0, innerWidth - leftW), "");
+				rightW = visibleWidth(effRight);
+			} else if (leftW > 0) {
+				effLeft = truncateToWidth(effLeft, innerWidth, "");
+				leftW = visibleWidth(effLeft);
+			} else {
+				effRight = truncateToWidth(effRight, innerWidth, "");
+				rightW = visibleWidth(effRight);
+			}
+		}
+
+		const fill = "─".repeat(Math.max(0, innerWidth - leftW - rightW));
+		return `${this.borderColor(leftCorner)}${effLeft}${this.borderColor(fill)}${effRight}${this.borderColor(rightCorner)}`;
+	}
+
 	protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+		if (this.tuiStyle === "compact" && width >= 20 && !this.workingStatusIndicator) {
+			const meta = this.borderMetaProvider?.();
+			const left = hiddenLineCount > 0 ? this.borderColor(`↑ ${hiddenLineCount} more`) : undefined;
+			return this.buildLabeledBorder(width, "──", "──", left, meta?.rightTop);
+		}
 		if (!this.embedWorkingStatus || !this.workingStatusIndicator || width <= 0) {
 			return super.renderTopBorder(width, hiddenLineCount);
 		}
@@ -159,6 +225,60 @@ export class CustomEditor extends Editor {
 			status +
 			this.borderColor("─".repeat(Math.max(0, width - prefixWidth - statusWidth)))
 		);
+	}
+
+	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
+		let border: string;
+		if (this.tuiStyle === "compact" && width >= 20) {
+			const meta = this.borderMetaProvider?.();
+			const right =
+				hiddenLineCount > 0 ? this.borderColor(`↓ ${hiddenLineCount} more`) : meta?.rightBottom;
+			border = this.buildLabeledBorder(width, "──", "──", meta?.leftBottom, right);
+		} else {
+			border = super.renderBottomBorder(width, hiddenLineCount);
+		}
+		this.lastRenderedBottomBorder = border;
+		return border;
+	}
+
+	override render(width: number): string[] {
+		if ((this.tuiStyle !== "rounded" && this.tuiStyle !== "opentui") || width < 20) {
+			return super.render(width);
+		}
+
+		const innerWidth = Math.max(1, width - 4);
+		const lines = super.render(innerWidth);
+		if (lines.length < 2) {
+			return lines;
+		}
+
+		const meta = this.borderMetaProvider?.();
+		let topLeftLabel: string | undefined;
+		if (this.embedWorkingStatus && this.workingStatusIndicator) {
+			topLeftLabel = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 8));
+		}
+		const topBorder = this.buildLabeledBorder(width, "╭─", "─╮", topLeftLabel, meta?.rightTop);
+		const bottomBorder = this.buildLabeledBorder(width, "╰─", "─╯", meta?.leftBottom, meta?.rightBottom);
+
+		const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+		const bodyStart = 1;
+		const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+
+		const result: string[] = [topBorder];
+		const leftWall = this.borderColor("│ ");
+		const rightWall = this.borderColor(" │");
+		for (let i = bodyStart; i < bodyEnd; i++) {
+			const line = lines[i] ?? "";
+			const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+			result.push(`${leftWall}${line}${pad}${rightWall}`);
+		}
+		result.push(bottomBorder);
+
+		// Preserve autocomplete lines below bottom border
+		for (let i = bodyEnd + 1; i < lines.length; i++) {
+			result.push(`  ${lines[i] ?? ""}`);
+		}
+		return result;
 	}
 
 	/**
