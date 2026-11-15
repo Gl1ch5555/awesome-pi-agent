@@ -49,8 +49,6 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	tuiMode?: TuiMode;
-	web?: boolean;
-	webPort?: number;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
 	messages: string[];
@@ -240,15 +238,6 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--verbose") {
 			result.verbose = true;
-		} else if (arg === "--web") {
-			result.web = true;
-		} else if (arg === "--web-port") {
-			const portVal = Number(args[++i]);
-			if (Number.isFinite(portVal) && portVal > 0 && portVal <= 65535) {
-				result.webPort = Math.floor(portVal);
-			} else {
-				result.diagnostics.push({ type: "error", message: "--web-port requires a valid port (1-65535)" });
-			}
 		} else if (arg === "--approve" || arg === "-a") {
 			result.projectTrustOverride = true;
 		} else if (arg === "--no-approve" || arg === "-na") {

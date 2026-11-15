@@ -1036,8 +1036,6 @@ export async function main(args: string[], options?: MainOptions) {
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
 			tuiMode: parsed.tuiMode,
-			web: parsed.web,
-			webPort: parsed.webPort,
 			initialThemeSetting: parsed.useTheme,
 		});
 		if (startupBenchmark) {

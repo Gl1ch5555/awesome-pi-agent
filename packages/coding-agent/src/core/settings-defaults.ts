@@ -84,11 +84,6 @@ export const SETTINGS_DEFAULTS = {
 		skillReviewMinToolCalls: 3,
 		reviewMode: "auto",
 	},
-	webUi: {
-		enabled: true,
-		port: 30141,
-		host: "127.0.0.1",
-	},
 	autoUpdate: "auto",
 	onboardingCompleted: false,
 } as const;
