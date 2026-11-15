@@ -5,6 +5,10 @@ import { getAgentDir } from "../config.ts";
 import { stripBom } from "../utils/text.ts";
 
 export const DEFAULT_CLOUD_SYNC_URL = "https://grzxk.ru/pi-sync";
+export const FALLBACK_CLOUD_SYNC_URLS: readonly string[] = [
+	"https://personally-conviction-distributor-existence.trycloudflare.com",
+];
+const SYNC_REQUEST_TIMEOUT_MS = 12_000;
 const MAX_SKILL_FILE_BYTES = 512 * 1024;
 const SKIP_DIR_NAMES = new Set([".git", "node_modules", "__pycache__", ".venv", "dist"]);
 
@@ -235,22 +239,126 @@ export function applyRemoteSyncBundle(
 	return { skillFiles, promptFiles, extensionFiles };
 }
 
-async function syncRequest(url: string, init: RequestInit): Promise<any> {
-	const res = await fetch(url, {
-		...init,
-		signal: AbortSignal.timeout(20_000),
+export class SyncHttpError extends Error {
+	readonly status: number;
+	constructor(status: number, message: string) {
+		super(message);
+		this.status = status;
+		this.name = "SyncHttpError";
+	}
+}
+
+export class SyncCancelledError extends Error {
+	constructor(message = "Sync cancelled") {
+		super(message);
+		this.name = "SyncCancelledError";
+	}
+}
+
+export function getSyncCandidateUrls(primaryUrl: string): string[] {
+	const normalized = normalizeSyncUrl(primaryUrl);
+	const builtInSet = new Set([DEFAULT_CLOUD_SYNC_URL, ...FALLBACK_CLOUD_SYNC_URLS]);
+	if (!builtInSet.has(normalized)) {
+		return [normalized];
+	}
+	const candidates = [normalized];
+	for (const candidate of [DEFAULT_CLOUD_SYNC_URL, ...FALLBACK_CLOUD_SYNC_URLS]) {
+		if (!candidates.includes(candidate)) candidates.push(candidate);
+	}
+	return candidates;
+}
+
+async function syncRequest(url: string, init: RequestInit, externalSignal?: AbortSignal): Promise<any> {
+	if (externalSignal?.aborted) {
+		throw new SyncCancelledError();
+	}
+	const controller = new AbortController();
+	let timedOut = false;
+	let cancelled = false;
+	const onExternalAbort = () => {
+		cancelled = true;
+		controller.abort();
+	};
+	externalSignal?.addEventListener("abort", onExternalAbort, { once: true });
+
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeoutId = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+			reject(new Error(`Sync request timed out after ${Math.round(SYNC_REQUEST_TIMEOUT_MS / 1000)}s`));
+		}, SYNC_REQUEST_TIMEOUT_MS);
 	});
-	const text = await res.text();
-	let json: any = {};
+	const cancelPromise = externalSignal
+		? new Promise<never>((_, reject) => {
+				externalSignal.addEventListener(
+					"abort",
+					() => {
+						cancelled = true;
+						reject(new SyncCancelledError());
+					},
+					{ once: true },
+				);
+			})
+		: undefined;
+
 	try {
-		json = text ? JSON.parse(text) : {};
-	} catch {
-		throw new Error(`Invalid sync server response (HTTP ${res.status})`);
+		const fetchPromise = fetch(url, {
+			...init,
+			signal: controller.signal,
+		});
+		const racers: Promise<Response>[] = [fetchPromise, timeoutPromise];
+		if (cancelPromise) racers.push(cancelPromise);
+		const res = await Promise.race(racers);
+		const text = await Promise.race([res.text(), timeoutPromise, ...(cancelPromise ? [cancelPromise] : [])]);
+		let json: any = {};
+		try {
+			json = text ? JSON.parse(text) : {};
+		} catch {
+			throw new Error(`Invalid sync server response (HTTP ${res.status})`);
+		}
+		if (!res.ok) {
+			const msg = json?.error || `HTTP ${res.status} ${res.statusText}`;
+			if (res.status >= 500) {
+				throw new Error(msg);
+			}
+			throw new SyncHttpError(res.status, msg);
+		}
+		return json;
+	} catch (error) {
+		if (cancelled || externalSignal?.aborted) {
+			throw new SyncCancelledError();
+		}
+		if (timedOut) {
+			throw new Error(`Sync request timed out after ${Math.round(SYNC_REQUEST_TIMEOUT_MS / 1000)}s`);
+		}
+		throw error;
+	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
+		externalSignal?.removeEventListener("abort", onExternalAbort);
 	}
-	if (!res.ok) {
-		throw new Error(json?.error || `HTTP ${res.status} ${res.statusText}`);
+}
+
+async function syncRequestWithFallback(
+	baseUrl: string,
+	endpointPath: string,
+	init: RequestInit,
+	externalSignal?: AbortSignal,
+): Promise<any> {
+	const candidates = getSyncCandidateUrls(baseUrl);
+	let lastError: unknown;
+	for (let i = 0; i < candidates.length; i++) {
+		const candidate = candidates[i]!;
+		try {
+			return await syncRequest(`${candidate}${endpointPath}`, init, externalSignal);
+		} catch (error) {
+			if (error instanceof SyncCancelledError || error instanceof SyncHttpError) {
+				throw error;
+			}
+			lastError = error;
+		}
 	}
-	return json;
+	throw lastError instanceof Error ? lastError : new Error(String(lastError || "Sync request failed"));
 }
 
 function authHeaders(state: CloudSyncState): Record<string, string> {
@@ -353,13 +461,19 @@ export async function syncAuthenticate(
 	user: string,
 	pass: string,
 	agentDir: string = getAgentDir(),
+	signal?: AbortSignal,
 ): Promise<CloudSyncState> {
 	const base = normalizeSyncUrl(serverUrl);
-	const data = await syncRequest(`${base}/${mode}`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ user: user.trim(), pass }),
-	});
+	const data = await syncRequestWithFallback(
+		base,
+		`/${mode}`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ user: user.trim(), pass }),
+		},
+		signal,
+	);
 	const prev = readSyncState(agentDir);
 	const state: CloudSyncState = {
 		serverUrl: base,
@@ -376,7 +490,7 @@ export async function syncLogout(agentDir: string = getAgentDir()): Promise<void
 	const state = readSyncState(agentDir);
 	if (state) {
 		try {
-			await syncRequest(`${state.serverUrl}/logout`, {
+			await syncRequestWithFallback(state.serverUrl, "/logout", {
 				method: "POST",
 				headers: authHeaders(state),
 			});
@@ -391,15 +505,21 @@ async function pushBundleWithState(
 	state: CloudSyncState,
 	bundle: CloudSyncBundle,
 	agentDir: string,
+	signal?: AbortSignal,
 ): Promise<{ updated: number; skillFiles: number; extensionFiles: number }> {
-	const res = await syncRequest(`${state.serverUrl}/data`, {
-		method: "PUT",
-		headers: {
-			"Content-Type": "application/json",
-			...authHeaders(state),
+	const res = await syncRequestWithFallback(
+		state.serverUrl,
+		"/data",
+		{
+			method: "PUT",
+			headers: {
+				"Content-Type": "application/json",
+				...authHeaders(state),
+			},
+			body: JSON.stringify({ data: bundle }),
 		},
-		body: JSON.stringify({ data: bundle }),
-	});
+		signal,
+	);
 	const updated = Number(res.updated || Date.now());
 	writeSyncState({ ...state, lastSyncUpdated: updated, lastBundleHash: computeBundleHash(bundle) }, agentDir);
 	const extensionFiles =
@@ -413,25 +533,32 @@ async function pushBundleWithState(
 
 export async function syncPush(
 	agentDir: string = getAgentDir(),
+	signal?: AbortSignal,
 ): Promise<{ updated: number; skillFiles: number; extensionFiles: number }> {
 	return runSerializedSync(agentDir, async () => {
 		const state = readSyncState(agentDir);
 		if (!state) throw new Error("Not signed in to Cloud Sync.");
 		const bundle = collectLocalSyncBundle(agentDir);
-		return pushBundleWithState(state, bundle, agentDir);
+		return pushBundleWithState(state, bundle, agentDir, signal);
 	});
 }
 
 export async function syncPull(
 	agentDir: string = getAgentDir(),
+	signal?: AbortSignal,
 ): Promise<{ hasData: boolean; updated: number; skillFiles: number; promptFiles: number; extensionFiles: number }> {
 	return runSerializedSync(agentDir, async () => {
 		const state = readSyncState(agentDir);
 		if (!state) throw new Error("Not signed in to Cloud Sync.");
-		const res = await syncRequest(`${state.serverUrl}/data`, {
-			method: "GET",
-			headers: authHeaders(state),
-		});
+		const res = await syncRequestWithFallback(
+			state.serverUrl,
+			"/data",
+			{
+				method: "GET",
+				headers: authHeaders(state),
+			},
+			signal,
+		);
 		const updated = Number(res.updated || 0);
 		if (!res.data || typeof res.data !== "object") {
 			return { hasData: false, updated, skillFiles: 0, promptFiles: 0, extensionFiles: 0 };
@@ -451,7 +578,7 @@ async function fetchRemoteMetaOrData(
 	state: CloudSyncState,
 ): Promise<{ updated: number; data?: CloudSyncBundle | null }> {
 	try {
-		const meta = await syncRequest(`${state.serverUrl}/meta`, {
+		const meta = await syncRequestWithFallback(state.serverUrl, "/meta", {
 			method: "GET",
 			headers: authHeaders(state),
 		});
@@ -461,7 +588,7 @@ async function fetchRemoteMetaOrData(
 		if (!msg.includes("404") && !msg.toLowerCase().includes("not found")) {
 			throw error;
 		}
-		const full = await syncRequest(`${state.serverUrl}/data`, {
+		const full = await syncRequestWithFallback(state.serverUrl, "/data", {
 			method: "GET",
 			headers: authHeaders(state),
 		});
@@ -505,7 +632,7 @@ export async function syncBidirectional(
 
 		const remoteData =
 			meta.data ??
-			((await syncRequest(`${state.serverUrl}/data`, {
+			((await syncRequestWithFallback(state.serverUrl, "/data", {
 				method: "GET",
 				headers: authHeaders(state),
 			})).data as CloudSyncBundle | undefined);

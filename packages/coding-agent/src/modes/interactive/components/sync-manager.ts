@@ -33,6 +33,7 @@ export class SyncManagerComponent extends Container implements Focusable {
 	private input: Input;
 	private statusMessage = "";
 	private errorMessage = "";
+	private activeAbortController: AbortController | undefined;
 
 	private _focused = false;
 	get focused(): boolean {
@@ -160,6 +161,8 @@ export class SyncManagerComponent extends Container implements Focusable {
 			this.addChild(new Text(`${rawKeyHint("Enter", "save")}  ${rawKeyHint("Esc", "back")}`, 1, 0));
 		} else if (this.step === "busy") {
 			this.addChild(new Text(theme.fg("accent", this.statusMessage || "Syncing..."), 1, 0));
+			this.addChild(new Spacer(1));
+			this.addChild(new Text(rawKeyHint("Esc", "cancel"), 1, 0));
 		}
 
 		this.addChild(new Spacer(1));
@@ -168,29 +171,35 @@ export class SyncManagerComponent extends Container implements Focusable {
 	}
 
 	private async runPush(): Promise<void> {
+		const controller = new AbortController();
+		this.activeAbortController = controller;
 		this.step = "busy";
 		this.statusMessage = "Pushing settings, API keys, models, and skills...";
 		this.errorMessage = "";
 		this.rebuild();
 		try {
-			const res = await syncPush();
+			const res = await syncPush(undefined, controller.signal);
 			this.state = readSyncState();
 			this.statusMessage = `Pushed to cloud (${res.skillFiles} skill files synced)`;
 		} catch (error) {
 			this.statusMessage = "";
 			this.errorMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (this.activeAbortController === controller) this.activeAbortController = undefined;
 		}
 		this.step = "menu";
 		this.rebuild();
 	}
 
 	private async runPull(): Promise<void> {
+		const controller = new AbortController();
+		this.activeAbortController = controller;
 		this.step = "busy";
 		this.statusMessage = "Pulling settings, API keys, models, and skills...";
 		this.errorMessage = "";
 		this.rebuild();
 		try {
-			const res = await syncPull();
+			const res = await syncPull(undefined, controller.signal);
 			this.state = readSyncState();
 			if (!res.hasData) {
 				this.statusMessage = "Cloud account has no saved backup yet. Use Push first.";
@@ -201,47 +210,73 @@ export class SyncManagerComponent extends Container implements Focusable {
 		} catch (error) {
 			this.statusMessage = "";
 			this.errorMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			if (this.activeAbortController === controller) this.activeAbortController = undefined;
 		}
 		this.step = "menu";
 		this.rebuild();
 	}
 
 	private async runAuth(password: string): Promise<void> {
+		const controller = new AbortController();
+		this.activeAbortController = controller;
 		this.step = "busy";
 		this.statusMessage = this.authMode === "register" ? "Creating account..." : "Signing in...";
 		this.errorMessage = "";
 		this.rebuild();
 		try {
-			this.state = await syncAuthenticate(this.authMode, this.draftServerUrl, this.draftUser, password);
-			if (this.authMode === "login") {
-				const pull = await syncPull();
-				if (pull.hasData) {
-					await this.callbacks.onPulled();
-					this.statusMessage = `Signed in as ${this.state.user} and restored cloud backup`;
-				} else {
-					const push = await syncPush();
-					this.statusMessage = `Signed in as ${this.state.user} (uploaded local config, ${push.skillFiles} skills)`;
-				}
-			} else {
-				const push = await syncPush();
-				this.statusMessage = `Account created and synced (${push.skillFiles} skill files)`;
-			}
-			this.state = readSyncState();
-			this.selectedIndex = 0;
-			this.step = "menu";
-			this.rebuild();
+			this.state = await syncAuthenticate(
+				this.authMode,
+				this.draftServerUrl,
+				this.draftUser,
+				password,
+				undefined,
+				controller.signal,
+			);
 		} catch (error) {
+			if (this.activeAbortController === controller) this.activeAbortController = undefined;
 			this.statusMessage = "";
 			this.errorMessage = error instanceof Error ? error.message : String(error);
 			this.input.setValue("");
 			this.step = "auth-pass";
 			this.rebuild();
+			return;
 		}
+
+		try {
+			if (this.authMode === "login") {
+				const pull = await syncPull(undefined, controller.signal);
+				if (pull.hasData) {
+					await this.callbacks.onPulled();
+					this.statusMessage = `Signed in as ${this.state.user} and restored cloud backup`;
+				} else {
+					const push = await syncPush(undefined, controller.signal);
+					this.statusMessage = `Signed in as ${this.state.user} (uploaded local config, ${push.skillFiles} skills)`;
+				}
+			} else {
+				const push = await syncPush(undefined, controller.signal);
+				this.statusMessage = `Account created and synced (${push.skillFiles} skill files)`;
+			}
+		} catch (error) {
+			this.statusMessage = "";
+			this.errorMessage = `Signed in as ${this.state.user}, but initial sync failed: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			if (this.activeAbortController === controller) this.activeAbortController = undefined;
+		}
+		this.state = readSyncState();
+		this.selectedIndex = 0;
+		this.step = "menu";
+		this.rebuild();
 	}
 
 	handleInput(data: string): void {
 		const kb = getKeybindings();
-		if (this.step === "busy") return;
+		if (this.step === "busy") {
+			if (kb.matches(data, "tui.select.cancel")) {
+				this.activeAbortController?.abort();
+			}
+			return;
+		}
 
 		if (this.step === "menu") {
 			const items = this.getMenuItems();
