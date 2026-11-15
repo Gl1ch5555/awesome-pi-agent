@@ -77,7 +77,7 @@ import {
 	detectCacheMiss,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
-import { readSyncState, syncAutoOnStartup, syncPull, syncPush } from "../../core/cloud-sync.ts";
+import { readSyncState, syncAutoOnStartup, syncBidirectional, syncPull, syncPush } from "../../core/cloud-sync.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
 import type {
@@ -519,6 +519,8 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
+	private pendingSyncedReload = false;
+	private backgroundSyncInFlight = false;
 	private onInputCallback?: (input: string | { text: string; images?: ImageContent[] }) => void;
 	private pendingUserInputs: Array<string | { text: string; images?: ImageContent[] }> = [];
 	private pendingImageAttachments: PendingImageAttachment[] = [];
@@ -1258,9 +1260,9 @@ export class InteractiveMode {
 			});
 		}
 
-		void syncAutoOnStartup()
+		void syncAutoOnStartup(this.settingsManager.getAgentDir())
 			.then(async (res) => {
-				if (res.action === "pulled") {
+				if (res.action === "pulled" || res.action === "merged") {
 					await this.applySyncedConfiguration();
 					this.showStatus(
 						`Cloud sync: restored settings, skills (${res.skillFiles ?? 0}) & plugins (${res.extensionFiles ?? 0})`,
@@ -3981,11 +3983,15 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 
 				this.ui.requestRender();
+				this.triggerBackgroundTurnSync();
 				break;
 
 			case "agent_settled":
 				// The session records deferred user bash results when the run settles; show them there too.
 				this.flushPendingBashComponents();
+				if (this.pendingSyncedReload) {
+					await this.applySyncedConfiguration();
+				}
 				this.ui.requestRender();
 				await this.checkShutdownRequested();
 				break;
@@ -5699,16 +5705,53 @@ export class InteractiveMode {
 	}
 
 	private triggerAutoSyncPush(): void {
-		const state = readSyncState();
-		if (state?.autoSync) {
-			void syncPush().catch(() => {});
-		}
+		const agentDir = this.settingsManager.getAgentDir();
+		const state = readSyncState(agentDir);
+		if (!state?.autoSync) return;
+		void this.settingsManager
+			.flush()
+			.then(() => syncBidirectional(agentDir))
+			.then(async (res) => {
+				if (res.action === "pulled" || res.action === "merged") {
+					await this.applySyncedConfiguration();
+				}
+			})
+			.catch(() => {});
+	}
+
+	private triggerBackgroundTurnSync(): void {
+		if (this.backgroundSyncInFlight) return;
+		const agentDir = this.settingsManager.getAgentDir();
+		const state = readSyncState(agentDir);
+		if (!state?.autoSync) return;
+		this.backgroundSyncInFlight = true;
+		void this.settingsManager
+			.flush()
+			.then(() => syncBidirectional(agentDir))
+			.then(async (res) => {
+				if (res.action === "pulled" || res.action === "merged") {
+					await this.applySyncedConfiguration();
+				}
+			})
+			.catch(() => {})
+			.finally(() => {
+				this.backgroundSyncInFlight = false;
+			});
 	}
 
 	private async applySyncedConfiguration(): Promise<void> {
-		this.settingsManager.reload();
+		if (this.session.isStreaming || this.session.isCompacting) {
+			this.pendingSyncedReload = true;
+			return;
+		}
+		this.pendingSyncedReload = false;
+		await this.settingsManager.reload();
 		await this.session.modelRuntime.refresh();
 		await this.session.reload();
+		const tuiStyle = this.settingsManager.getTuiStyle();
+		this.defaultEditor.setTuiStyle(tuiStyle);
+		this.footer.setTuiStyle(tuiStyle);
+		setThemeAccentOverride(this.settingsManager.getThemeAccent());
 		const themeSetting = this.settingsManager.getThemeSetting();
 		if (themeSetting) {
 			this.themeController.setThemeSetting(themeSetting);
@@ -5718,6 +5761,7 @@ export class InteractiveMode {
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();
+		this.webServer?.rebindSession();
 		this.ui.requestRender();
 	}
 

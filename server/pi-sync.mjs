@@ -203,6 +203,10 @@ const server = http.createServer(async (req, res) => {
 			return send(200, { ok: true });
 		}
 
+		if (req.method === "GET" && pathname === "/meta") {
+			return send(200, { updated: acc.updated || 0 });
+		}
+
 		if (req.method === "GET" && pathname === "/data") {
 			const data = decryptPayload(acc.encryptedData ?? null);
 			return send(200, { data, updated: acc.updated || 0 });

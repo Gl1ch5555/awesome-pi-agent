@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "../config.ts";
@@ -12,6 +13,7 @@ export interface CloudSyncState {
 	user: string;
 	token: string;
 	lastSyncUpdated: number;
+	lastBundleHash?: string;
 	autoSync: boolean;
 }
 
@@ -58,6 +60,7 @@ export function readSyncState(agentDir: string = getAgentDir()): CloudSyncState 
 			user: parsed.user,
 			token: parsed.token,
 			lastSyncUpdated: typeof parsed.lastSyncUpdated === "number" ? parsed.lastSyncUpdated : 0,
+			lastBundleHash: typeof parsed.lastBundleHash === "string" ? parsed.lastBundleHash : undefined,
 			autoSync: parsed.autoSync !== false,
 		};
 	} catch {
@@ -96,7 +99,15 @@ function readJsonOptional(filePath: string): Record<string, unknown> | undefined
 function writeJsonSafe(filePath: string, data: Record<string, unknown>, mode = 0o644): void {
 	const dir = dirname(filePath);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-	writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { encoding: "utf8", mode });
+	const nextContent = `${JSON.stringify(data, null, 2)}\n`;
+	try {
+		if (existsSync(filePath) && readFileSync(filePath, "utf8") === nextContent) {
+			return;
+		}
+	} catch {
+		// proceed with write
+	}
+	writeFileSync(filePath, nextContent, { encoding: "utf8", mode });
 }
 
 function isProbablyUtf8Text(buf: Buffer): boolean {
@@ -156,8 +167,25 @@ function applyDirectoryFiles(rootDir: string, files: Record<string, SyncedFileEn
 		const parent = dirname(target);
 		if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
 		if (entry.encoding === "base64") {
-			writeFileSync(target, Buffer.from(entry.content, "base64"));
+			const nextBuf = Buffer.from(entry.content, "base64");
+			try {
+				if (existsSync(target) && readFileSync(target).equals(nextBuf)) {
+					count++;
+					continue;
+				}
+			} catch {
+				// proceed with write
+			}
+			writeFileSync(target, nextBuf);
 		} else {
+			try {
+				if (existsSync(target) && readFileSync(target, "utf8") === entry.content) {
+					count++;
+					continue;
+				}
+			} catch {
+				// proceed with write
+			}
 			writeFileSync(target, entry.content, "utf8");
 		}
 		count++;
@@ -225,6 +253,100 @@ async function syncRequest(url: string, init: RequestInit): Promise<any> {
 	return json;
 }
 
+function authHeaders(state: CloudSyncState): Record<string, string> {
+	return { Authorization: `${"Bearer"} ${state.user}:${state.token}` };
+}
+
+function canonicalizeValue(value: unknown): unknown {
+	if (Array.isArray(value)) {
+		return value.map(canonicalizeValue);
+	}
+	if (value && typeof value === "object") {
+		const sorted: Record<string, unknown> = {};
+		for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+			const v = (value as Record<string, unknown>)[key];
+			if (v !== undefined) sorted[key] = canonicalizeValue(v);
+		}
+		return sorted;
+	}
+	return value;
+}
+
+export function computeBundleHash(bundle: CloudSyncBundle): string {
+	const { syncedAt: _ignored, ...rest } = bundle;
+	return createHash("sha256").update(JSON.stringify(canonicalizeValue(rest))).digest("hex");
+}
+
+function mergeJsonRecords(
+	remote?: Record<string, unknown>,
+	local?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	if (!remote && !local) return undefined;
+	if (!remote) return local;
+	if (!local) return remote;
+	const merged: Record<string, unknown> = { ...remote, ...local };
+	// Merge nested provider maps (models.json) and auth entries (auth.json) by key instead of dropping remote-only keys
+	if (
+		remote.providers &&
+		typeof remote.providers === "object" &&
+		!Array.isArray(remote.providers) &&
+		local.providers &&
+		typeof local.providers === "object" &&
+		!Array.isArray(local.providers)
+	) {
+		merged.providers = {
+			...(remote.providers as Record<string, unknown>),
+			...(local.providers as Record<string, unknown>),
+		};
+	}
+	return merged;
+}
+
+function mergeFileMaps(
+	remote?: Record<string, SyncedFileEntry>,
+	local?: Record<string, SyncedFileEntry>,
+): Record<string, SyncedFileEntry> | undefined {
+	if (!remote && !local) return undefined;
+	return { ...(remote ?? {}), ...(local ?? {}) };
+}
+
+export function mergeSyncBundles(remote: CloudSyncBundle, local: CloudSyncBundle): CloudSyncBundle {
+	return {
+		version: 1,
+		syncedAt: Date.now(),
+		settings: mergeJsonRecords(remote.settings, local.settings),
+		models: mergeJsonRecords(remote.models, local.models),
+		auth: mergeJsonRecords(remote.auth, local.auth),
+		keybindings: mergeJsonRecords(remote.keybindings, local.keybindings),
+		memory: mergeJsonRecords(remote.memory, local.memory),
+		projectMemories: mergeFileMaps(remote.projectMemories, local.projectMemories),
+		skills: mergeFileMaps(remote.skills, local.skills),
+		prompts: mergeFileMaps(remote.prompts, local.prompts),
+		extensions: mergeFileMaps(remote.extensions, local.extensions),
+		themes: mergeFileMaps(remote.themes, local.themes),
+		tools: mergeFileMaps(remote.tools, local.tools),
+		plugins: mergeFileMaps(remote.plugins, local.plugins),
+		gitPackages: mergeFileMaps(remote.gitPackages, local.gitPackages),
+	};
+}
+
+const syncQueues = new Map<string, Promise<void>>();
+
+function runSerializedSync<T>(agentDir: string, fn: () => Promise<T>): Promise<T> {
+	const key = resolve(agentDir);
+	const prev = syncQueues.get(key) ?? Promise.resolve();
+	const next = prev.catch(() => {}).then(fn);
+	const tail = next.then(
+		() => undefined,
+		() => undefined,
+	);
+	syncQueues.set(key, tail);
+	void tail.then(() => {
+		if (syncQueues.get(key) === tail) syncQueues.delete(key);
+	});
+	return next;
+}
+
 export async function syncAuthenticate(
 	mode: "login" | "register",
 	serverUrl: string,
@@ -256,7 +378,7 @@ export async function syncLogout(agentDir: string = getAgentDir()): Promise<void
 		try {
 			await syncRequest(`${state.serverUrl}/logout`, {
 				method: "POST",
-				headers: { Authorization: `Bearer ${state.user}:${state.token}` },
+				headers: authHeaders(state),
 			});
 		} catch {
 			// Clear local session even if server unreachable
@@ -265,22 +387,21 @@ export async function syncLogout(agentDir: string = getAgentDir()): Promise<void
 	clearSyncState(agentDir);
 }
 
-export async function syncPush(
-	agentDir: string = getAgentDir(),
+async function pushBundleWithState(
+	state: CloudSyncState,
+	bundle: CloudSyncBundle,
+	agentDir: string,
 ): Promise<{ updated: number; skillFiles: number; extensionFiles: number }> {
-	const state = readSyncState(agentDir);
-	if (!state) throw new Error("Not signed in to Cloud Sync.");
-	const bundle = collectLocalSyncBundle(agentDir);
 	const res = await syncRequest(`${state.serverUrl}/data`, {
 		method: "PUT",
 		headers: {
 			"Content-Type": "application/json",
-			Authorization: `Bearer ${state.user}:${state.token}`,
+			...authHeaders(state),
 		},
 		body: JSON.stringify({ data: bundle }),
 	});
 	const updated = Number(res.updated || Date.now());
-	writeSyncState({ ...state, lastSyncUpdated: updated }, agentDir);
+	writeSyncState({ ...state, lastSyncUpdated: updated, lastBundleHash: computeBundleHash(bundle) }, agentDir);
 	const extensionFiles =
 		Object.keys(bundle.extensions ?? {}).length +
 		Object.keys(bundle.themes ?? {}).length +
@@ -290,42 +411,135 @@ export async function syncPush(
 	return { updated, skillFiles: Object.keys(bundle.skills ?? {}).length, extensionFiles };
 }
 
+export async function syncPush(
+	agentDir: string = getAgentDir(),
+): Promise<{ updated: number; skillFiles: number; extensionFiles: number }> {
+	return runSerializedSync(agentDir, async () => {
+		const state = readSyncState(agentDir);
+		if (!state) throw new Error("Not signed in to Cloud Sync.");
+		const bundle = collectLocalSyncBundle(agentDir);
+		return pushBundleWithState(state, bundle, agentDir);
+	});
+}
+
 export async function syncPull(
 	agentDir: string = getAgentDir(),
 ): Promise<{ hasData: boolean; updated: number; skillFiles: number; promptFiles: number; extensionFiles: number }> {
-	const state = readSyncState(agentDir);
-	if (!state) throw new Error("Not signed in to Cloud Sync.");
-	const res = await syncRequest(`${state.serverUrl}/data`, {
-		method: "GET",
-		headers: { Authorization: `Bearer ${state.user}:${state.token}` },
+	return runSerializedSync(agentDir, async () => {
+		const state = readSyncState(agentDir);
+		if (!state) throw new Error("Not signed in to Cloud Sync.");
+		const res = await syncRequest(`${state.serverUrl}/data`, {
+			method: "GET",
+			headers: authHeaders(state),
+		});
+		const updated = Number(res.updated || 0);
+		if (!res.data || typeof res.data !== "object") {
+			return { hasData: false, updated, skillFiles: 0, promptFiles: 0, extensionFiles: 0 };
+		}
+		const remoteBundle = res.data as CloudSyncBundle;
+		const applied = applyRemoteSyncBundle(remoteBundle, agentDir);
+		const localBundle = collectLocalSyncBundle(agentDir);
+		writeSyncState(
+			{ ...state, lastSyncUpdated: updated, lastBundleHash: computeBundleHash(localBundle) },
+			agentDir,
+		);
+		return { hasData: true, updated, ...applied };
 	});
-	const updated = Number(res.updated || 0);
-	if (!res.data || typeof res.data !== "object") {
-		return { hasData: false, updated, skillFiles: 0, promptFiles: 0, extensionFiles: 0 };
+}
+
+async function fetchRemoteMetaOrData(
+	state: CloudSyncState,
+): Promise<{ updated: number; data?: CloudSyncBundle | null }> {
+	try {
+		const meta = await syncRequest(`${state.serverUrl}/meta`, {
+			method: "GET",
+			headers: authHeaders(state),
+		});
+		return { updated: Number(meta.updated || 0) };
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		if (!msg.includes("404") && !msg.toLowerCase().includes("not found")) {
+			throw error;
+		}
+		const full = await syncRequest(`${state.serverUrl}/data`, {
+			method: "GET",
+			headers: authHeaders(state),
+		});
+		return {
+			updated: Number(full.updated || 0),
+			data: full.data && typeof full.data === "object" ? (full.data as CloudSyncBundle) : null,
+		};
 	}
-	const applied = applyRemoteSyncBundle(res.data as CloudSyncBundle, agentDir);
-	writeSyncState({ ...state, lastSyncUpdated: updated }, agentDir);
-	return { hasData: true, updated, ...applied };
+}
+
+export type BidirectionalSyncAction = "none" | "pulled" | "pushed" | "merged" | "up-to-date";
+
+export async function syncBidirectional(
+	agentDir: string = getAgentDir(),
+): Promise<{ action: BidirectionalSyncAction; skillFiles?: number; extensionFiles?: number }> {
+	return runSerializedSync(agentDir, async () => {
+		const state = readSyncState(agentDir);
+		if (!state || !state.autoSync) return { action: "none" };
+
+		const localBundle = collectLocalSyncBundle(agentDir);
+		const localHash = computeBundleHash(localBundle);
+		const localChanged = !state.lastBundleHash || localHash !== state.lastBundleHash;
+
+		const meta = await fetchRemoteMetaOrData(state);
+		const remoteUpdated = meta.updated;
+
+		if (remoteUpdated === 0 || meta.data === null) {
+			const pushed = await pushBundleWithState(state, localBundle, agentDir);
+			return { action: "pushed", skillFiles: pushed.skillFiles, extensionFiles: pushed.extensionFiles };
+		}
+
+		const remoteChanged = remoteUpdated > state.lastSyncUpdated;
+
+		if (!remoteChanged) {
+			if (localChanged) {
+				const pushed = await pushBundleWithState(state, localBundle, agentDir);
+				return { action: "pushed", skillFiles: pushed.skillFiles, extensionFiles: pushed.extensionFiles };
+			}
+			return { action: "up-to-date" };
+		}
+
+		const remoteData =
+			meta.data ??
+			((await syncRequest(`${state.serverUrl}/data`, {
+				method: "GET",
+				headers: authHeaders(state),
+			})).data as CloudSyncBundle | undefined);
+
+		if (!remoteData || typeof remoteData !== "object") {
+			const pushed = await pushBundleWithState(state, localBundle, agentDir);
+			return { action: "pushed", skillFiles: pushed.skillFiles, extensionFiles: pushed.extensionFiles };
+		}
+
+		// First sync on a fresh device (lastSyncUpdated === 0) or no local edits: pull remote cleanly.
+		if (!state.lastBundleHash || state.lastSyncUpdated === 0 || !localChanged) {
+			const applied = applyRemoteSyncBundle(remoteData, agentDir);
+			const nextLocal = collectLocalSyncBundle(agentDir);
+			writeSyncState(
+				{ ...state, lastSyncUpdated: remoteUpdated, lastBundleHash: computeBundleHash(nextLocal) },
+				agentDir,
+			);
+			return { action: "pulled", skillFiles: applied.skillFiles, extensionFiles: applied.extensionFiles };
+		}
+
+		// Both remote and local changed: merge and push back so neither device's changes are lost.
+		const merged = mergeSyncBundles(remoteData, localBundle);
+		const applied = applyRemoteSyncBundle(merged, agentDir);
+		const pushed = await pushBundleWithState(state, merged, agentDir);
+		return {
+			action: "merged",
+			skillFiles: applied.skillFiles || pushed.skillFiles,
+			extensionFiles: applied.extensionFiles || pushed.extensionFiles,
+		};
+	});
 }
 
 export async function syncAutoOnStartup(
 	agentDir: string = getAgentDir(),
-): Promise<{ action: "none" | "pulled" | "pushed" | "up-to-date"; skillFiles?: number; extensionFiles?: number }> {
-	const state = readSyncState(agentDir);
-	if (!state || !state.autoSync) return { action: "none" };
-	const res = await syncRequest(`${state.serverUrl}/data`, {
-		method: "GET",
-		headers: { Authorization: `Bearer ${state.user}:${state.token}` },
-	});
-	const remoteUpdated = Number(res.updated || 0);
-	if (!res.data || remoteUpdated === 0) {
-		const pushed = await syncPush(agentDir);
-		return { action: "pushed", skillFiles: pushed.skillFiles, extensionFiles: pushed.extensionFiles };
-	}
-	if (remoteUpdated > state.lastSyncUpdated) {
-		const applied = applyRemoteSyncBundle(res.data as CloudSyncBundle, agentDir);
-		writeSyncState({ ...state, lastSyncUpdated: remoteUpdated }, agentDir);
-		return { action: "pulled", skillFiles: applied.skillFiles, extensionFiles: applied.extensionFiles };
-	}
-	return { action: "up-to-date" };
+): Promise<{ action: BidirectionalSyncAction; skillFiles?: number; extensionFiles?: number }> {
+	return syncBidirectional(agentDir);
 }

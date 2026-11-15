@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
+import { readSyncState, syncBidirectional } from "../../core/cloud-sync.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { PI_WEB_ICON_SVG, PI_WEB_MANIFEST, PI_WEB_SW_JS, renderWebUiHtml } from "./web-ui-html.ts";
@@ -120,6 +121,7 @@ export class PiWebServer {
 		this.unsubscribeSession = this.session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "agent_end") {
 				this.maybeAutoNameSession();
+				this.triggerBackgroundSync();
 			}
 			if (
 				event.type === "agent_start" ||
@@ -141,6 +143,32 @@ export class PiWebServer {
 		if (!this.server) return;
 		this.subscribeToCurrentSession();
 		this.broadcastRaw({ type: "session_changed" });
+	}
+
+	private syncInFlight = false;
+
+	private triggerBackgroundSync(): void {
+		if (this.syncInFlight) return;
+		const agentDir = this.session.settingsManager.getAgentDir();
+		const state = readSyncState(agentDir);
+		if (!state?.autoSync) return;
+		this.syncInFlight = true;
+		void this.session.settingsManager
+			.flush()
+			.then(() => syncBidirectional(agentDir))
+			.then(async (res) => {
+				if ((res.action === "pulled" || res.action === "merged") && !this.session.isStreaming && !this.session.isCompacting) {
+					await this.session.settingsManager.reload();
+					await this.session.modelRuntime.refresh();
+					await this.session.reload();
+					this.onStateChange?.();
+					this.broadcastRaw({ type: "session_changed" });
+				}
+			})
+			.catch(() => {})
+			.finally(() => {
+				this.syncInFlight = false;
+			});
 	}
 
 	async start(): Promise<string> {
@@ -328,7 +356,11 @@ export class PiWebServer {
 			} catch {
 				// Ignore listing failures
 			}
-			const availableModels = this.session.modelRuntime.getAvailableSnapshot().map((m) => ({
+			const rawModels =
+				this.session.scopedModels.length > 0
+					? this.session.scopedModels.map((s) => s.model)
+					: this.session.modelRuntime.getAvailableSnapshot();
+			const availableModels = rawModels.map((m) => ({
 				provider: m.provider,
 				id: m.id,
 				name: m.name,
@@ -612,6 +644,7 @@ export class PiWebServer {
 			}
 			await this.session.setModel(target, { persist: true });
 			this.onStateChange?.();
+			this.triggerBackgroundSync();
 			this.sendJson(res, 200, { ok: true });
 			return;
 		}
@@ -625,6 +658,7 @@ export class PiWebServer {
 			}
 			this.session.setThinkingLevel(level, { persist: true });
 			this.onStateChange?.();
+			this.triggerBackgroundSync();
 			this.sendJson(res, 200, { ok: true });
 			return;
 		}
