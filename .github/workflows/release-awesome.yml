@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-release:
+  build-cli:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -53,7 +53,7 @@ jobs:
         run: |
           ./release-assets/linux-x64/pi --version
 
-      - name: Prepare version metadata and checksums
+      - name: Prepare version metadata
         run: |
           set -euo pipefail
           cd release-assets
@@ -66,6 +66,96 @@ jobs:
             "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
           EOF
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-assets
+          path: |
+            release-assets/pi-linux-x64.tar.gz
+            release-assets/pi-linux-arm64.tar.gz
+            release-assets/pi-darwin-arm64.tar.gz
+            release-assets/pi-darwin-x64.tar.gz
+            release-assets/pi-windows-x64.zip
+            release-assets/pi-windows-arm64.zip
+            release-assets/version.json
+
+  build-windows-desktop:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish Windows Desktop App (x64 & arm64)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path desktop-assets | Out-Null
+          foreach ($arch in @("x64", "arm64")) {
+            $outDir = "out-$arch"
+            dotnet publish apps/windows-desktop/PiAwesome.csproj -c Release -r "win-$arch" -o $outDir
+            Compress-Archive -Path "$outDir\PiAwesome.exe" -DestinationPath "desktop-assets\pi-desktop-windows-$arch.zip" -Force
+          }
+
+      - name: Upload Windows Desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-assets
+          path: |
+            desktop-assets/pi-desktop-windows-x64.zip
+            desktop-assets/pi-desktop-windows-arm64.zip
+
+  build-android-launcher:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build Android Release APK
+        run: |
+          gradle -p apps/android-launcher assembleRelease
+          mkdir -p android-assets
+          cp apps/android-launcher/app/build/outputs/apk/release/app-release.apk android-assets/pi-awesome-android.apk
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-assets
+          path: android-assets/pi-awesome-android.apk
+
+  publish-release:
+    needs: [build-cli, build-windows-desktop, build-android-launcher]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd release-assets
           sha256sum \
             pi-linux-x64.tar.gz \
             pi-linux-arm64.tar.gz \
@@ -73,6 +163,9 @@ jobs:
             pi-darwin-x64.tar.gz \
             pi-windows-x64.zip \
             pi-windows-arm64.zip \
+            pi-desktop-windows-x64.zip \
+            pi-desktop-windows-arm64.zip \
+            pi-awesome-android.apk \
             version.json > SHA256SUMS
 
       - name: Publish rolling latest GitHub Release
@@ -87,7 +180,7 @@ jobs:
 
           PKG_VERSION="$(node -e 'console.log(JSON.parse(require("fs").readFileSync("packages/coding-agent/package.json", "utf8")).version)')"
           SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-7)"
-          NOTES="Prebuilt standalone binaries for **awesome-pi-agent** v${PKG_VERSION} (\`${SHORT_SHA}\`).\n\nNo Node.js or build step required — install via:\n\`\`\`bash\ncurl -fsSL https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.sh | bash\n\`\`\`"
+          NOTES="Prebuilt standalone binaries, Windows Desktop Web UI app, and Android Termux Launcher APK for **awesome-pi-agent** v${PKG_VERSION} (\`${SHORT_SHA}\`).\n\nInstall CLI:\n\`\`\`bash\ncurl -fsSL https://raw.githubusercontent.com/Gl1ch5555/awesome-pi-agent/main/install.sh | bash\n\`\`\`"
 
           ASSETS=(
             release-assets/pi-linux-x64.tar.gz
@@ -96,6 +189,9 @@ jobs:
             release-assets/pi-darwin-x64.tar.gz
             release-assets/pi-windows-x64.zip
             release-assets/pi-windows-arm64.zip
+            release-assets/pi-desktop-windows-x64.zip
+            release-assets/pi-desktop-windows-arm64.zip
+            release-assets/pi-awesome-android.apk
             release-assets/version.json
             release-assets/SHA256SUMS
           )

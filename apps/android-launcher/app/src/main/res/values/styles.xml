@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.PiAwesome" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">#18181b</item>
+        <item name="android:colorBackground">#18181b</item>
+        <item name="android:statusBarColor">#18181b</item>
+        <item name="android:navigationBarColor">#18181b</item>
+    </style>
+</resources>

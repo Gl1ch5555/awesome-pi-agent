@@ -8,7 +8,7 @@ import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../co
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import { getToolListError, type TuiMode } from "../core/settings-manager.ts";
 
-export type Mode = "text" | "json" | "rpc";
+export type Mode = "text" | "json" | "rpc" | "web";
 
 export interface Args {
 	provider?: string;
@@ -50,6 +50,7 @@ export interface Args {
 	offline?: boolean;
 	tuiMode?: TuiMode;
 	web?: boolean;
+	webOnly?: boolean;
 	webPort?: number;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
@@ -102,10 +103,10 @@ export function parseArgs(args: string[]): Args {
 				continue;
 			}
 			i++;
-			if (mode !== "text" && mode !== "json" && mode !== "rpc") {
+			if (mode !== "text" && mode !== "json" && mode !== "rpc" && mode !== "web") {
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid mode "${mode}". Valid values: text, json, rpc`,
+					message: `Invalid mode "${mode}". Valid values: text, json, rpc, web`,
 				});
 				continue;
 			}
@@ -242,6 +243,9 @@ export function parseArgs(args: string[]): Args {
 			result.verbose = true;
 		} else if (arg === "--web") {
 			result.web = true;
+		} else if (arg === "--web-only") {
+			result.web = true;
+			result.webOnly = true;
 		} else if (arg === "--web-port") {
 			const portVal = Number(args[++i]);
 			if (Number.isFinite(portVal) && portVal > 0 && portVal <= 65535) {
