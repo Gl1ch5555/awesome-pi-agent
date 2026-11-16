@@ -6,9 +6,10 @@ import { stripBom } from "../utils/text.ts";
 
 export const DEFAULT_CLOUD_SYNC_URL = "https://grzxk.ru/pi-sync";
 export const FALLBACK_CLOUD_SYNC_URLS: readonly string[] = [
+	"https://lfcleague.ru/pi-sync",
 	"https://personally-conviction-distributor-existence.trycloudflare.com",
 ];
-const SYNC_REQUEST_TIMEOUT_MS = 12_000;
+const SYNC_REQUEST_TIMEOUT_MS = 8_000;
 const MAX_SKILL_FILE_BYTES = 512 * 1024;
 const SKIP_DIR_NAMES = new Set([".git", "node_modules", "__pycache__", ".venv", "dist"]);
 
@@ -303,8 +304,13 @@ async function syncRequest(url: string, init: RequestInit, externalSignal?: Abor
 		: undefined;
 
 	try {
+		const headers = new Headers(init.headers);
+		if (!headers.has("Connection")) {
+			headers.set("Connection", "close");
+		}
 		const fetchPromise = fetch(url, {
 			...init,
+			headers,
 			signal: controller.signal,
 		});
 		const racers: Promise<Response>[] = [fetchPromise, timeoutPromise];
