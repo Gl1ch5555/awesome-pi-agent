@@ -3,7 +3,6 @@ package dev.piawesome.launcher
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,10 +10,12 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
@@ -48,6 +49,9 @@ class MainActivity : Activity() {
     private lateinit var errorDetail: TextView
     private lateinit var distroInput: EditText
     private lateinit var retryButton: Button
+    private lateinit var appSettingsButton: Button
+    private var awaitingSettingsReturn = false
+    private var permissionRequestedOnce = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +62,14 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         scheduleLaunch()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (awaitingSettingsReturn) {
+            awaitingSettingsReturn = false
+            scheduleLaunch()
+        }
     }
 
     private fun dp(value: Int): Int {
@@ -170,54 +182,89 @@ class MainActivity : Activity() {
         }
         errorCard.addView(distroInput)
 
-        val btnRow = LinearLayout(this).apply {
+        val primaryRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dp(8)
+            }
         }
 
-        val copyBtn = makeButton("Команда Termux", "#27272a") {
+        retryButton = makeButton("Повторить", "#3f3f46", weight = 1f) {
+            saveDistro()
+            scheduleLaunch()
+        }
+        primaryRow.addView(retryButton)
+
+        appSettingsButton = makeButton("Настройки прав", "#27272a", weight = 1f) {
+            awaitingSettingsReturn = true
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null)
+            )
+            startActivity(intent)
+        }.apply {
+            visibility = View.GONE
+            (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
+        }
+        primaryRow.addView(appSettingsButton)
+        errorCard.addView(primaryRow)
+
+        val secondaryRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val copyBtn = makeButton("Команда Termux", "#27272a", weight = 1f) {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("Termux allow-external-apps", SETUP_CMD))
             Toast.makeText(this, "Команда скопирована", Toast.LENGTH_SHORT).show()
         }
-        btnRow.addView(copyBtn)
+        secondaryRow.addView(copyBtn)
 
-        val openTermuxBtn = makeButton("Открыть Termux", "#27272a") {
+        val openTermuxBtn = makeButton("Открыть Termux", "#27272a", weight = 1f) {
             openTermuxApp()
         }.apply {
             (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
         }
-        btnRow.addView(openTermuxBtn)
+        secondaryRow.addView(openTermuxBtn)
 
-        retryButton = makeButton("Повторить", "#3f3f46") {
-            saveDistro()
-            scheduleLaunch()
-        }.apply {
-            (layoutParams as LinearLayout.LayoutParams).leftMargin = dp(8)
-        }
-        btnRow.addView(retryButton)
-
-        errorCard.addView(btnRow)
+        errorCard.addView(secondaryRow)
         root.addView(errorCard)
 
         setContentView(root)
     }
 
-    private fun makeButton(label: String, bgHex: String, onClick: () -> Unit): Button {
+    private fun makeButton(
+        label: String,
+        bgHex: String,
+        weight: Float = 0f,
+        onClick: () -> Unit
+    ): Button {
         return Button(this).apply {
             text = label
             isAllCaps = false
+            setSingleLine(true)
             textSize = 12f
             setTextColor(Color.parseColor("#e4e4e7"))
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             background = GradientDrawable().apply {
                 setColor(Color.parseColor(bgHex))
                 setStroke(dp(1), Color.parseColor("#3f3f46"))
             }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
+            layoutParams = if (weight > 0f) {
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight)
+            } else {
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
             setOnClickListener { onClick() }
         }
     }
@@ -233,11 +280,12 @@ class MainActivity : Activity() {
     private fun scheduleLaunch() {
         spinner.visibility = View.VISIBLE
         errorCard.visibility = View.GONE
+        appSettingsButton.visibility = View.GONE
         statusText.text = "Запуск Pi Awesome..."
         subText.text = "Termux · proot · zsh · pi"
 
         handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({ launchTermuxPi() }, 220)
+        handler.postDelayed({ launchTermuxPi() }, 300)
     }
 
     private fun isTermuxInstalled(): Boolean {
@@ -257,12 +305,15 @@ class MainActivity : Activity() {
     private fun launchTermuxPi() {
         if (!isTermuxInstalled()) {
             showError(
-                "Termux не найден.\nУстановите Termux (F-Droid / GitHub) и настройте proot-distro с zsh и pi-awesome."
+                "Termux не найден.\nУстановите Termux (F-Droid / GitHub) и настройте proot-distro с zsh и pi-awesome.",
+                showAppSettings = false
             )
             return
         }
 
         if (checkSelfPermission(TERMUX_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            permissionRequestedOnce = true
+            statusText.text = "Запрос разрешения Termux..."
             requestPermissions(arrayOf(TERMUX_PERMISSION), REQ_TERMUX_PERMISSION)
             return
         }
@@ -291,12 +342,14 @@ class MainActivity : Activity() {
                 statusText.text = "Запущено в Termux"
                 subText.text = "proot · zsh · pi"
                 errorCard.visibility = View.VISIBLE
+                appSettingsButton.visibility = View.GONE
                 errorDetail.text = "Если Termux не открылся автоматически, проверьте allow-external-apps = true в ~/.termux/termux.properties."
             }, 1400)
         } catch (e: Exception) {
             showError(
                 "Не удалось запустить команду в Termux: ${e.message}\n\n" +
-                    "Убедитесь, что в ~/.termux/termux.properties добавлено allow-external-apps = true (кнопка «Команда Termux»)."
+                    "Убедитесь, что в ~/.termux/termux.properties добавлено allow-external-apps = true (кнопка «Команда Termux»).",
+                showAppSettings = true
             )
         }
     }
@@ -311,9 +364,13 @@ class MainActivity : Activity() {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 launchTermuxPi()
             } else {
-                showError(
-                    "Не выдано разрешение com.termux.permission.RUN_COMMAND.\nНажмите «Повторить» и разрешите запуск команд Termux."
-                )
+                val blocked = permissionRequestedOnce && !shouldShowRequestPermissionRationale(TERMUX_PERMISSION)
+                val msg = if (blocked) {
+                    "Система не дала выдать com.termux.permission.RUN_COMMAND автоматически.\nОткройте «Настройки прав» → «Дополнительные разрешения» → включите запуск команд Termux."
+                } else {
+                    "Не выдано разрешение com.termux.permission.RUN_COMMAND.\nНажмите «Повторить» или откройте «Настройки прав»."
+                }
+                showError(msg, showAppSettings = true)
             }
         }
     }
@@ -350,11 +407,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showError(message: String) {
+    private fun showError(message: String, showAppSettings: Boolean) {
         spinner.visibility = View.GONE
         statusText.text = "Требуется настройка"
         subText.text = "Termux · proot · zsh · pi"
         errorDetail.text = message
+        appSettingsButton.visibility = if (showAppSettings) View.VISIBLE else View.GONE
         errorCard.visibility = View.VISIBLE
     }
 }
