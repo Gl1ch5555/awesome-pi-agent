@@ -138,7 +138,7 @@ import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { LiveVoiceSession } from "../../core/voice/groq-whisper.ts";
-import { warmupRecorderBackend } from "../../core/voice/voice-recorder.ts";
+import { warmupRecorderBackendAsync } from "../../core/voice/voice-recorder.ts";
 import { addMcpServerConfig } from "../../extensions/mcp/config.ts";
 import { PiWebServer } from "../web/web-server.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
@@ -157,7 +157,7 @@ import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
-import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
+import { ensureTool, getToolPath, type ToolStatus } from "../../utils/tools-manager.ts";
 import { type LatestPiRelease } from "../../utils/version-check.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
@@ -1160,16 +1160,22 @@ export class InteractiveMode {
 		if (this.renderer.mode === "fullscreen") this.showFullscreenModelScopeNotice();
 		this.ui.requestRender();
 
-		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
-		// so slow downloads do not make startup appear frozen.
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
-		const [fdPath] = await Promise.all([
-			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
-			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
-		]);
-		this.fdPath = fdPath;
+		// Check fd and rg synchronously; if either is missing, download in the background so startup never blocks input.
+		const existingFd = getToolPath("fd");
+		const existingRg = getToolPath("rg");
+		this.fdPath = existingFd ?? undefined;
+		if (!existingFd || !existingRg) {
+			void Promise.all([
+				existingFd ? Promise.resolve(existingFd) : ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+				existingRg ? Promise.resolve(existingRg) : ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+			])
+				.then(([fdPath]) => {
+					if (fdPath) this.fdPath = fdPath;
+				})
+				.catch(() => {});
+		}
 
-		// Enable the remaining input handlers only after managed-tool setup completes.
+		// Enable input handlers immediately without waiting for optional tool downloads.
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 		this.ui.requestRender();
@@ -1197,11 +1203,14 @@ export class InteractiveMode {
 
 		// Flush the completed startup state before loading the remaining syntax grammars.
 		this.ui.renderNow();
-		void loadAllHighlightLanguages().then(() => {
+		setTimeout(() => {
 			if (!this.isInitialized) return;
-			this.ui.invalidate();
-			this.ui.requestRender();
-		});
+			void loadAllHighlightLanguages().then(() => {
+				if (!this.isInitialized) return;
+				this.ui.invalidate();
+				this.ui.requestRender();
+			});
+		}, 250).unref?.();
 	}
 
 	/**
@@ -3345,12 +3354,10 @@ export class InteractiveMode {
 		this.defaultEditor.setVoiceHoldEnabled(voiceHoldEnabled);
 		if (voiceHoldEnabled) {
 			setTimeout(() => {
-				try {
-					warmupRecorderBackend();
-				} catch {
+				void warmupRecorderBackendAsync().catch(() => {
 					// Ignore warmup failures; actual errors surface when recording starts
-				}
-			}, 50).unref?.();
+				});
+			}, 500).unref?.();
 		}
 		this.defaultEditor.onVoiceHoldStart = () => {
 			this.startVoiceDictation();
@@ -3680,6 +3687,9 @@ export class InteractiveMode {
 					autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
 					blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 				});
+				if (resolved.errors.length > 0) {
+					this.showWarning(resolved.errors.join("; "));
+				}
 				await this.session.prompt(resolved.text, {
 					streamingBehavior: "steer",
 					images: resolved.images.length > 0 ? resolved.images : undefined,
@@ -3699,6 +3709,9 @@ export class InteractiveMode {
 				autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
 				blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 			});
+			if (resolved.errors.length > 0) {
+				this.showWarning(resolved.errors.join("; "));
+			}
 			const submittedInput = {
 				text: resolved.text,
 				images: resolved.images.length > 0 ? resolved.images : undefined,
@@ -4897,6 +4910,9 @@ export class InteractiveMode {
 				autoResizeImages: this.settingsManager?.getImageAutoResize?.() ?? true,
 				blockImages: this.settingsManager?.getBlockImages?.() ?? false,
 			});
+			if (resolved.errors.length > 0) {
+				this.showWarning(resolved.errors.join("; "));
+			}
 			await this.session.prompt(resolved.text, {
 				streamingBehavior: "followUp",
 				images: resolved.images.length > 0 ? resolved.images : undefined,
@@ -5746,8 +5762,17 @@ export class InteractiveMode {
 		}
 		this.pendingSyncedReload = false;
 		await this.settingsManager.reload();
-		await this.session.modelRuntime.refresh();
+		await this.session.modelRuntime.refresh({ allowNetwork: false });
 		await this.session.reload();
+		const syncedProvider = this.settingsManager.getDefaultProvider();
+		const syncedModelId = this.settingsManager.getDefaultModel();
+		if (syncedProvider && syncedModelId) {
+			const syncedModel = this.session.modelRuntime.getModel(syncedProvider, syncedModelId);
+			const cur = this.session.model;
+			if (syncedModel && (!cur || cur.provider !== syncedModel.provider || cur.id !== syncedModel.id)) {
+				await this.session.setModel(syncedModel, { persist: false }).catch(() => {});
+			}
+		}
 		const tuiStyle = this.settingsManager.getTuiStyle();
 		this.defaultEditor.setTuiStyle(tuiStyle);
 		this.footer.setTuiStyle(tuiStyle);
@@ -5901,7 +5926,7 @@ export class InteractiveMode {
 				this.ui,
 				{
 					onSaved: async (providerId, modelIds) => {
-						await this.session.modelRuntime.refresh();
+						await this.session.modelRuntime.refresh({ allowNetwork: false });
 						await this.updateAvailableProviderCount();
 						if (!this.session.model && modelIds[0]) {
 							const firstModel = this.session.modelRuntime.getModel(providerId, modelIds[0]);
@@ -5914,7 +5939,7 @@ export class InteractiveMode {
 						this.triggerAutoSyncPush();
 					},
 					onDeleted: async (providerId) => {
-						await this.session.modelRuntime.refresh();
+						await this.session.modelRuntime.refresh({ allowNetwork: false });
 						await this.updateAvailableProviderCount();
 						this.footer.invalidate();
 						this.showStatus(`Removed provider "${providerId}"`);

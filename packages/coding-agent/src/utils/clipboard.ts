@@ -84,8 +84,12 @@ export async function readClipboardFilePaths(): Promise<string[] | null> {
 
 	const p = platform();
 	if (p === "win32") {
-		const psScript = "Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName } | Where-Object { $_ }";
-		const out = await runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
+		const psScript = [
+			"Add-Type -AssemblyName System.Windows.Forms",
+			"$files = [System.Windows.Forms.Clipboard]::GetFileDropList()",
+			"if ($files -and $files.Count -gt 0) { $files | ForEach-Object { Write-Output $_ } }",
+		].join("; ");
+		const out = await runClipboardCommand("powershell.exe", ["-NoProfile", "-STA", "-Command", psScript], {
 			timeoutMs: 3000,
 		});
 		if (out) {
@@ -96,10 +100,30 @@ export async function readClipboardFilePaths(): Promise<string[] | null> {
 				.filter(Boolean);
 			if (paths.length > 0) return paths;
 		}
+	} else if (p === "darwin") {
+		const out = await runClipboardCommand(
+			"osascript",
+			["-e", 'try\nreturn POSIX path of (the clipboard as «class furl»)\non error\nreturn ""\nend try'],
+			{ timeoutMs: 2000 },
+		);
+		if (out) {
+			const filePath = out.toString("utf8").trim();
+			if (filePath) return [filePath];
+		}
 	} else if (p === "linux") {
 		const uriCommands: [string, string[]][] = [];
-		if (process.env.WAYLAND_DISPLAY) uriCommands.push(["wl-paste", ["--no-newline", "--type", "text/uri-list"]]);
-		if (process.env.DISPLAY) uriCommands.push(["xclip", ["-selection", "clipboard", "-t", "text/uri-list", "-o"]]);
+		if (process.env.WAYLAND_DISPLAY) {
+			uriCommands.push(
+				["wl-paste", ["--no-newline", "--type", "text/uri-list"]],
+				["wl-paste", ["--no-newline", "--type", "x-special/gnome-copied-files"]],
+			);
+		}
+		if (process.env.DISPLAY) {
+			uriCommands.push(
+				["xclip", ["-selection", "clipboard", "-t", "text/uri-list", "-o"]],
+				["xclip", ["-selection", "clipboard", "-t", "x-special/gnome-copied-files", "-o"]],
+			);
+		}
 		for (const [cmd, args] of uriCommands) {
 			const out = await runClipboardCommand(cmd, args, { timeoutMs: 1500 });
 			if (out) {

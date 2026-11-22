@@ -115,6 +115,32 @@ async function readClipboardImageViaWlPaste(): Promise<ClipboardImage | null | u
  * Windows screenshots (Win+Shift+S). PowerShell can access the Windows clipboard
  * directly, so we use it as a fallback.
  */
+function buildWindowsClipboardImageScript(psQuotedPath: string): string {
+	return [
+		"Add-Type -AssemblyName System.Windows.Forms",
+		"Add-Type -AssemblyName System.Drawing",
+		`$path = '${psQuotedPath}'`,
+		"$saved = $false",
+		"try {",
+		"  $png = [System.Windows.Forms.Clipboard]::GetData('PNG')",
+		"  if ($png -is [System.IO.MemoryStream]) {",
+		"    [System.IO.File]::WriteAllBytes($path, $png.ToArray())",
+		"    $saved = $true",
+		"  } elseif ($png -is [byte[]]) {",
+		"    [System.IO.File]::WriteAllBytes($path, $png)",
+		"    $saved = $true",
+		"  }",
+		"} catch {}",
+		"if (-not $saved) {",
+		"  $img = [System.Windows.Forms.Clipboard]::GetImage()",
+		"  if ($img) {",
+		"    try { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); $saved = $true } finally { $img.Dispose() }",
+		"  }",
+		"}",
+		"if ($saved) { Write-Output 'ok' } else { Write-Output 'empty' }",
+	].join("; ");
+}
+
 async function readClipboardImageViaPowerShell(): Promise<ClipboardImage | null> {
 	const tmpFile = join(tmpdir(), `pi-wsl-clip-${randomUUID()}.png`);
 
@@ -132,15 +158,9 @@ async function readClipboardImageViaPowerShell(): Promise<ClipboardImage | null>
 		}
 
 		const psQuotedWinPath = winPath.replaceAll("'", "''");
-		const psScript = [
-			"Add-Type -AssemblyName System.Windows.Forms",
-			"Add-Type -AssemblyName System.Drawing",
-			`$path = '${psQuotedWinPath}'`,
-			"$img = [System.Windows.Forms.Clipboard]::GetImage()",
-			"if ($img) { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output 'ok' } else { Write-Output 'empty' }",
-		].join("; ");
+		const psScript = buildWindowsClipboardImageScript(psQuotedWinPath);
 
-		const result = await runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
+		const result = await runClipboardCommand("powershell.exe", ["-NoProfile", "-STA", "-Command", psScript], {
 			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
 		});
 		if (result === undefined) {
@@ -201,20 +221,19 @@ async function readClipboardImageViaNativePowerShell(): Promise<ClipboardImage |
 	const tmpFile = join(tmpdir(), `pi-win-clip-${randomUUID()}.png`);
 	try {
 		const psQuotedPath = tmpFile.replaceAll("'", "''");
-		const psScript = [
-			"Add-Type -AssemblyName System.Windows.Forms",
-			"Add-Type -AssemblyName System.Drawing",
-			`$path = '${psQuotedPath}'`,
-			"$img = [System.Windows.Forms.Clipboard]::GetImage()",
-			"if ($img) { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output 'ok' } else { Write-Output 'empty' }",
-		].join("; ");
-		const result = await runClipboardCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
-			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
-		});
-		if (!result || result.toString("utf-8").trim() !== "ok") return null;
-		const bytes = readFileSync(tmpFile);
-		if (bytes.length === 0) return null;
-		return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+		const psScript = buildWindowsClipboardImageScript(psQuotedPath);
+		const shells = ["powershell.exe", "pwsh.exe"] as const;
+		for (const shell of shells) {
+			const result = await runClipboardCommand(shell, ["-NoProfile", "-STA", "-Command", psScript], {
+				timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
+			});
+			if (result === undefined) continue;
+			if (result.toString("utf-8").trim() !== "ok") return null;
+			const bytes = readFileSync(tmpFile);
+			if (bytes.length === 0) return null;
+			return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+		}
+		return null;
 	} catch {
 		return null;
 	} finally {
@@ -222,6 +241,68 @@ async function readClipboardImageViaNativePowerShell(): Promise<ClipboardImage |
 			unlinkSync(tmpFile);
 		} catch {
 			// Ignore cleanup errors.
+		}
+	}
+}
+
+async function readClipboardImageViaMacOS(): Promise<ClipboardImage | null> {
+	// Fast path: pngpaste (if installed via Homebrew)
+	const pngPasteData = await runClipboardCommand("pngpaste", ["-"], { timeoutMs: 2000 });
+	if (pngPasteData && pngPasteData.length > 0) {
+		return { bytes: new Uint8Array(pngPasteData), mimeType: detectSupportedImageMimeType(pngPasteData) ?? "image/png" };
+	}
+
+	// Built-in macOS fallback: AppleScript writes clipboard PNG/TIFF to a temp file
+	const tmpFile = join(tmpdir(), `pi-mac-clip-${randomUUID()}.png`);
+	const tmpTiff = join(tmpdir(), `pi-mac-clip-${randomUUID()}.tiff`);
+	try {
+		const escapedPng = tmpFile.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+		const escapedTiff = tmpTiff.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+		const script = [
+			`try`,
+			`  set theData to the clipboard as «class PNGf»`,
+			`  set f to open for access POSIX file "${escapedPng}" with write permission`,
+			`  set eof of f to 0`,
+			`  write theData to f`,
+			`  close access f`,
+			`  return "png"`,
+			`on error`,
+			`  try`,
+			`    set theData to the clipboard as TIFF picture`,
+			`    set f to open for access POSIX file "${escapedTiff}" with write permission`,
+			`    set eof of f to 0`,
+			`    write theData to f`,
+			`    close access f`,
+			`    return "tiff"`,
+			`  on error`,
+			`    return "empty"`,
+			`  end try`,
+			`end try`,
+		].join("\n");
+		const out = await runClipboardCommand("osascript", ["-e", script], { timeoutMs: 3000 });
+		const kind = out?.toString("utf-8").trim();
+		if (kind === "png") {
+			const bytes = readFileSync(tmpFile);
+			if (bytes.length > 0) return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+		} else if (kind === "tiff") {
+			const converted = await runClipboardCommand("sips", ["-s", "format", "png", tmpTiff, "--out", tmpFile], {
+				timeoutMs: 3000,
+			});
+			if (converted !== undefined) {
+				const bytes = readFileSync(tmpFile);
+				if (bytes.length > 0) return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
+			}
+		}
+		return null;
+	} catch {
+		return null;
+	} finally {
+		for (const f of [tmpFile, tmpTiff]) {
+			try {
+				unlinkSync(f);
+			} catch {
+				// ignore
+			}
 		}
 	}
 }
@@ -251,6 +332,9 @@ export async function readClipboardImage(options?: {
 	} else if (platform === "win32") {
 		image = await readClipboardImageViaNativeClipboard();
 		if (!image) image = await readClipboardImageViaNativePowerShell();
+	} else if (platform === "darwin") {
+		image = await readClipboardImageViaNativeClipboard();
+		if (!image) image = await readClipboardImageViaMacOS();
 	} else {
 		image = await readClipboardImageViaNativeClipboard();
 	}
@@ -261,6 +345,10 @@ export async function readClipboardImage(options?: {
 
 	// Convert unsupported formats (e.g., Windows DIB data wrapped as BMP) to PNG
 	if (!isSupportedImageMimeType(image.mimeType)) {
+		const sniffed = detectSupportedImageMimeType(image.bytes);
+		if (sniffed) {
+			return { bytes: image.bytes, mimeType: sniffed };
+		}
 		const pngBytes = await convertToPng(image.bytes);
 		if (!pngBytes) {
 			return null;

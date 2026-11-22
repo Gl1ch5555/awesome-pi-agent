@@ -74,9 +74,24 @@ export async function resizeImageInProcess(
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	const inputBase64Size = Math.ceil(inputBytes.byteLength / 3) * 4;
 
+	const rawFallback = (): ResizedImage | null => {
+		if (inputBase64Size < opts.maxBytes) {
+			return {
+				data: Buffer.from(inputBytes).toString("base64"),
+				mimeType: mimeType || "image/png",
+				originalWidth: 0,
+				originalHeight: 0,
+				width: 0,
+				height: 0,
+				wasResized: false,
+			};
+		}
+		return null;
+	};
+
 	const photon = await loadPhoton();
 	if (!photon) {
-		return null;
+		return rawFallback();
 	}
 
 	let image: ReturnType<typeof photon.PhotonImage.new_from_byteslice> | undefined;
@@ -167,7 +182,7 @@ export async function resizeImageInProcess(
 
 		return null;
 	} catch {
-		return null;
+		return rawFallback();
 	} finally {
 		if (image) {
 			image.free();

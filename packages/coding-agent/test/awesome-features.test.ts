@@ -763,4 +763,84 @@ describe("awesome-pi-agent customizations", () => {
 			session.dispose();
 		}
 	});
+
+	it("preserves remote model deletions and prevents stale local settings from overwriting remote models on sync merge", async () => {
+		const { computeSectionHashes, mergeSyncBundles, collectLocalSyncBundle, applyRemoteSyncBundle } = await import(
+			"../src/core/cloud-sync.js"
+		);
+
+		const baseBundle = {
+			version: 1 as const,
+			syncedAt: 1000,
+			settings: { theme: "graphite", defaultProvider: "omni", defaultModel: "old-model" },
+			models: {
+				providers: {
+					omni: { baseUrl: "http://example/v1", models: [{ id: "old-model" }] },
+					staleProvider: { baseUrl: "http://127.0.0.1:8080/v1", models: [{ id: "test" }] },
+				},
+			},
+		};
+		const prevHashes = computeSectionHashes(baseBundle);
+
+		// PC deleted staleProvider and updated omni models + defaultModel
+		const remoteBundle = {
+			version: 1 as const,
+			syncedAt: 2000,
+			settings: { theme: "graphite", defaultProvider: "omni", defaultModel: "new-model" },
+			models: {
+				providers: {
+					omni: { baseUrl: "http://example/v1", models: [{ id: "new-model" }] },
+				},
+			},
+		};
+
+		// Laptop still has old models.json, and only touched theme in settings.json
+		const localBundle = {
+			version: 1 as const,
+			syncedAt: 1500,
+			settings: { theme: "dracula", defaultProvider: "omni", defaultModel: "old-model", deviceId: "laptop-1" },
+			models: baseBundle.models,
+		};
+
+		const merged = mergeSyncBundles(remoteBundle, localBundle, {
+			previousSectionHashes: prevHashes,
+			remoteUpdated: 2000,
+		});
+
+		// Models section was untouched on laptop -> remote models win completely (staleProvider stays deleted!)
+		expect(Object.keys((merged.models as any).providers)).toEqual(["omni"]);
+		expect((merged.models as any).providers.omni.models.map((m: any) => m.id)).toEqual(["new-model"]);
+		// Ephemeral deviceId is stripped from synced settings
+		expect((merged.settings as any).deviceId).toBeUndefined();
+
+		// Local deviceId/lastChangelogVersion are preserved on disk when applying remote settings
+		const dir = join(tempDir, "sync-preserve");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, "settings.json"),
+			JSON.stringify({ deviceId: "laptop-1", lastChangelogVersion: "1.5.2", theme: "dark" }),
+		);
+		applyRemoteSyncBundle(remoteBundle, dir);
+		const onDisk = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+		expect(onDisk.deviceId).toBe("laptop-1");
+		expect(onDisk.lastChangelogVersion).toBe("1.5.2");
+		expect(onDisk.defaultModel).toBe("new-model");
+		const collected = collectLocalSyncBundle(dir);
+		expect((collected.settings as any).deviceId).toBeUndefined();
+	});
+
+	it("normalizes PowerShell drag-and-drop image paths and reports missing attachment errors", async () => {
+		const { normalizePastedFilePathCandidate, resolvePromptImages } = await import("../src/utils/image-attachments.js");
+		const normalized = normalizePastedFilePathCandidate("& '/tmp/photo shot.png'", "/tmp");
+		expect(normalized).toBe("/tmp/photo shot.png");
+
+		const res = await resolvePromptImages("check (image)", [{ path: "/nonexistent/missing.png" }], {
+			cwd: "/tmp",
+			autoResizeImages: true,
+			blockImages: false,
+		});
+		expect(res.images).toHaveLength(0);
+		expect(res.errors).toHaveLength(1);
+		expect(res.errors[0]).toContain("missing.png");
+	});
 });

@@ -153,7 +153,7 @@ export function inferModelMetadata(raw: Record<string, unknown>): DiscoveredProv
 			? true
 			: typeof capabilities?.vision === "boolean"
 				? capabilities.vision
-				: /(vision|vl|gpt-4o|gpt-4\.1|gpt-5|gpt-6|claude-3|claude-4|claude-sonnet|claude-opus|gemini|pixtral|qwen.*vl|grok-4|kimi)/.test(
+				: /(vision|vl|gpt-4o|gpt-4\.1|gpt-5|gpt-6|claude-3|claude-4|claude-5|claude-fable|claude-sonnet|claude-opus|claude-haiku|gemini|pixtral|qwen.*vl|grok-4|kimi)/.test(
 						lower,
 					);
 

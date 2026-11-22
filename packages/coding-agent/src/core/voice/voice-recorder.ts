@@ -1,4 +1,4 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcess, execFile, execFileSync, spawn } from "node:child_process";
 
 const SAMPLE_RATE = 16_000;
 const CHANNELS = 1;
@@ -173,10 +173,46 @@ function findLinuxFfmpegInput(): { format: string; input: string } | undefined {
 	return undefined;
 }
 
+function execFileAsync(
+	cmd: string,
+	args: string[],
+	timeout: number,
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		execFile(cmd, args, { encoding: "utf8", timeout, windowsHide: true }, (err, stdout, stderr) => {
+			resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+		});
+	});
+}
+
+async function commandExistsAsync(cmd: string): Promise<boolean> {
+	const checkCmd = process.platform === "win32" ? "where" : "which";
+	const res = await execFileAsync(checkCmd, [cmd], 1500);
+	return res.ok;
+}
+
+async function findLinuxFfmpegInputAsync(): Promise<{ format: string; input: string } | undefined> {
+	for (const flag of ["-devices", "-formats"]) {
+		const res = await execFileAsync("ffmpeg", ["-hide_banner", flag], 3000);
+		const out = `${res.stdout}\n${res.stderr}`;
+		if (/\bpulse\b/.test(out)) return { format: "pulse", input: "default" };
+		if (/\balsa\b/.test(out)) return { format: "alsa", input: "default" };
+		if (/\boss\b/.test(out)) return { format: "oss", input: "/dev/dsp" };
+	}
+	return undefined;
+}
+
+async function findWindowsDirectShowAudioDeviceAsync(): Promise<string | undefined> {
+	const res = await execFileAsync("ffmpeg", ["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"], 3000);
+	return parseDirectShowAudioDevice(`${res.stdout}\n${res.stderr}`);
+}
+
 let cachedRecorderBackend: { platform: string; backend: RecorderBackend | undefined } | undefined;
+let warmupPromise: Promise<RecorderBackend | undefined> | undefined;
 
 export function resetRecorderBackendCache(): void {
 	cachedRecorderBackend = undefined;
+	warmupPromise = undefined;
 }
 
 export function warmupRecorderBackend(): RecorderBackend | undefined {
@@ -186,6 +222,121 @@ export function warmupRecorderBackend(): RecorderBackend | undefined {
 	const backend = detectRecorderBackendUncached();
 	cachedRecorderBackend = { platform: process.platform, backend };
 	return backend;
+}
+
+export async function warmupRecorderBackendAsync(): Promise<RecorderBackend | undefined> {
+	if (cachedRecorderBackend && cachedRecorderBackend.platform === process.platform) {
+		return cachedRecorderBackend.backend;
+	}
+	if (warmupPromise) return warmupPromise;
+	warmupPromise = (async () => {
+		const p = process.platform;
+		let backend: RecorderBackend | undefined;
+		if (p === "linux") {
+			if (await commandExistsAsync("parecord")) {
+				backend = {
+					name: "parecord",
+					command: "parecord",
+					args: ["--format=s16le", "--rate=16000", "--channels=1", "--raw", "--latency-msec=50"],
+				};
+			} else if (await commandExistsAsync("arecord")) {
+				backend = {
+					name: "arecord",
+					command: "arecord",
+					args: ["-q", "-f", "S16_LE", "-r", "16000", "-c", "1", "-t", "raw"],
+				};
+			} else if (await commandExistsAsync("ffmpeg")) {
+				const linuxInput = await findLinuxFfmpegInputAsync();
+				if (linuxInput) {
+					backend = {
+						name: `ffmpeg-${linuxInput.format}`,
+						command: "ffmpeg",
+						args: [
+							"-loglevel",
+							"error",
+							"-f",
+							linuxInput.format,
+							"-i",
+							linuxInput.input,
+							"-ar",
+							"16000",
+							"-ac",
+							"1",
+							"-f",
+							"s16le",
+							"pipe:1",
+						],
+					};
+				}
+			}
+			if (!backend && (await commandExistsAsync("sox"))) {
+				backend = {
+					name: "sox",
+					command: "sox",
+					args: ["-q", "-d", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16", "-c", "1", "-"],
+				};
+			}
+		} else if (p === "darwin") {
+			if (await commandExistsAsync("sox")) {
+				backend = {
+					name: "sox",
+					command: "sox",
+					args: ["-q", "-d", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16", "-c", "1", "-"],
+				};
+			} else if (await commandExistsAsync("ffmpeg")) {
+				backend = {
+					name: "ffmpeg",
+					command: "ffmpeg",
+					args: ["-loglevel", "error", "-f", "avfoundation", "-i", ":0", "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"],
+				};
+			}
+		} else if (p === "win32") {
+			if (await commandExistsAsync("ffmpeg")) {
+				const audioDevice = await findWindowsDirectShowAudioDeviceAsync();
+				if (audioDevice) {
+					backend = {
+						name: "ffmpeg-dshow",
+						command: "ffmpeg",
+						args: [
+							"-loglevel",
+							"error",
+							"-f",
+							"dshow",
+							"-i",
+							`audio=${audioDevice}`,
+							"-ar",
+							"16000",
+							"-ac",
+							"1",
+							"-f",
+							"s16le",
+							"pipe:1",
+						],
+					};
+				}
+			}
+			if (!backend) {
+				const psCmd = (await commandExistsAsync("pwsh"))
+					? "pwsh"
+					: (await commandExistsAsync("powershell.exe"))
+						? "powershell.exe"
+						: undefined;
+				if (psCmd) {
+					const encoded = Buffer.from(buildWindowsPowerShellRecorderScript(), "utf16le").toString("base64");
+					backend = {
+						name: "powershell-winmm",
+						command: psCmd,
+						args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+					};
+				}
+			}
+		}
+		cachedRecorderBackend = { platform: p, backend };
+		return backend;
+	})().finally(() => {
+		warmupPromise = undefined;
+	});
+	return warmupPromise;
 }
 
 export function detectRecorderBackend(): RecorderBackend | undefined {

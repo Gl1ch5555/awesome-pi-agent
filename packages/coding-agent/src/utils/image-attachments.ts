@@ -18,6 +18,11 @@ export function normalizePastedFilePathCandidate(raw: string, cwd: string): stri
 	let candidate = raw.trim();
 	if (!candidate) return undefined;
 
+	// Strip PowerShell drag-and-drop call operator prefix (e.g. & 'C:\path\img.png')
+	if (/^&\s+['"]/.test(candidate)) {
+		candidate = candidate.replace(/^&\s+/, "").trim();
+	}
+
 	// Strip matching surrounding quotes (common when copying paths on Windows Explorer or dragging files)
 	if (
 		(candidate.startsWith('"') && candidate.endsWith('"')) ||
@@ -106,10 +111,11 @@ export async function resolvePromptImages(
 	rawText: string,
 	attachments: PendingImageAttachment[],
 	options: { cwd: string; autoResizeImages: boolean; blockImages: boolean },
-): Promise<{ text: string; images: ImageContent[] }> {
+): Promise<{ text: string; images: ImageContent[]; errors: string[] }> {
 	const images: ImageContent[] = [];
+	const errors: string[] = [];
 	if (options.blockImages) {
-		return { text: rawText, images };
+		return { text: rawText, images, errors };
 	}
 
 	let attachmentCursor = 0;
@@ -122,13 +128,15 @@ export async function resolvePromptImages(
 		const loaded = await loadImageAttachment(item.path, { autoResizeImages: options.autoResizeImages });
 		if (loaded) {
 			images.push(loaded);
+		} else {
+			errors.push(`Could not load image: ${item.path}`);
 		}
 	}
 
 	// Also detect any remaining quoted or unquoted image file paths directly in the prompt text
 	let text = rawText;
 	const pathRegex =
-		/(?:"([^"\r\n]+\.(?:png|jpe?g|webp|gif|bmp))"|'([^'\r\n]+\.(?:png|jpe?g|webp|gif|bmp))'|((?:[A-Za-z]:\\|\/|~\/)[^\s\r\n"'<>]+\.(?:png|jpe?g|webp|gif|bmp)))/gi;
+		/(?:"([^"\r\n]+\.(?:png|jpe?g|webp|gif|bmp))"|'([^'\r\n]+\.(?:png|jpe?g|webp|gif|bmp))'|((?:file:\/\/\/|[A-Za-z]:[\\/]|\/|~\/)[^\s\r\n"'<>]+\.(?:png|jpe?g|webp|gif|bmp)))/gi;
 	const replacements: Array<{ full: string; start: number; end: number; resolvedPath: string }> = [];
 	for (const m of text.matchAll(pathRegex)) {
 		const rawMatch = m[1] ?? m[2] ?? m[3];
@@ -149,6 +157,8 @@ export async function resolvePromptImages(
 			const loaded = await loadImageAttachment(rep.resolvedPath, { autoResizeImages: options.autoResizeImages });
 			if (loaded) {
 				images.push(loaded);
+			} else {
+				errors.push(`Could not load image: ${rep.resolvedPath}`);
 			}
 		}
 		// Replace from end to start so indices stay valid
@@ -158,5 +168,5 @@ export async function resolvePromptImages(
 		}
 	}
 
-	return { text, images };
+	return { text, images, errors };
 }

@@ -177,8 +177,17 @@ export class PiWebServer {
 			.then(async (res) => {
 				if ((res.action === "pulled" || res.action === "merged") && !this.session.isStreaming && !this.session.isCompacting) {
 					await this.session.settingsManager.reload();
-					await this.session.modelRuntime.refresh();
+					await this.session.modelRuntime.refresh({ allowNetwork: false });
 					await this.session.reload();
+					const syncedProvider = this.session.settingsManager.getDefaultProvider();
+					const syncedModelId = this.session.settingsManager.getDefaultModel();
+					if (syncedProvider && syncedModelId) {
+						const syncedModel = this.session.modelRuntime.getModel(syncedProvider, syncedModelId);
+						const cur = this.session.model;
+						if (syncedModel && (!cur || cur.provider !== syncedModel.provider || cur.id !== syncedModel.id)) {
+							await this.session.setModel(syncedModel, { persist: false }).catch(() => {});
+						}
+					}
 					this.onStateChange?.();
 					this.broadcastRaw({ type: "session_changed" });
 				}
