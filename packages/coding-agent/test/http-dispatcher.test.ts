@@ -3,7 +3,15 @@ import net from "node:net";
 import tls from "node:tls";
 import * as undici from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyHttpProxySettings, configureHttpDispatcher } from "../src/core/http-dispatcher.ts";
+import {
+	applyHttpProxySettings,
+	configureHttpDispatcher,
+	formatProxySummary,
+	formatProxyUrlForDisplay,
+	normalizeProxyUrl,
+	runWithProxyScope,
+	shouldUseProxyForScope,
+} from "../src/core/http-dispatcher.ts";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY"] as const;
 const DISPATCHER_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"] as const;
@@ -167,5 +175,101 @@ describe("http dispatcher", () => {
 		);
 		expect(connectSpy.mock.calls[0]?.[0]).not.toHaveProperty("autoSelectFamily");
 		expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(originalAttemptTimeoutMs);
+	});
+
+	it("normalizes and formats proxy settings and scopes", () => {
+		expect(normalizeProxyUrl("127.0.0.1:7890")).toBe("http://127.0.0.1:7890");
+		expect(normalizeProxyUrl("socks5://127.0.0.1:1080/")).toBe("socks5://127.0.0.1:1080");
+		expect(normalizeProxyUrl("ftp://127.0.0.1:21")).toBeUndefined();
+		expect(formatProxyUrlForDisplay("http://alice:secret@127.0.0.1:7890")).toBe("http://alice:***@127.0.0.1:7890");
+		expect(
+			formatProxySummary({
+				enabled: true,
+				url: "http://127.0.0.1:7890",
+				forAi: false,
+				forVoice: true,
+				forSync: false,
+				forWeb: false,
+			}),
+		).toBe("on (Voice)");
+		expect(
+			shouldUseProxyForScope("voice", {
+				enabled: true,
+				url: "http://127.0.0.1:7890",
+				forAi: false,
+				forVoice: true,
+			}),
+		).toBe(true);
+		expect(
+			shouldUseProxyForScope("ai", {
+				enabled: true,
+				url: "http://127.0.0.1:7890",
+				forAi: false,
+				forVoice: true,
+			}),
+		).toBe(false);
+	});
+
+	it("routes only enabled proxy scopes through the configured proxy", async () => {
+		const origin = http.createServer((_request, response) => {
+			response.end("direct-ok");
+		});
+		await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+		const originAddress = origin.address();
+		if (!originAddress || typeof originAddress === "string") {
+			throw new Error("Origin did not bind to a TCP port");
+		}
+
+		const proxyRequestLines: string[] = [];
+		const proxy = net.createServer((client) => {
+			client.once("data", (data) => {
+				const [requestLine = ""] = data.toString().split("\r\n");
+				proxyRequestLines.push(requestLine);
+				if (!requestLine.startsWith("CONNECT ")) {
+					client.end("HTTP/1.1 501 Not Implemented\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+					return;
+				}
+				const upstream = net.connect(originAddress.port, "127.0.0.1", () => {
+					client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+					client.pipe(upstream).pipe(client);
+				});
+				upstream.on("error", () => client.destroy());
+				client.on("error", () => upstream.destroy());
+			});
+		});
+		await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+		const proxyAddress = proxy.address();
+		if (!proxyAddress || typeof proxyAddress === "string") {
+			throw new Error("Proxy did not bind to a TCP port");
+		}
+
+		configureHttpDispatcher(30_000, {
+			enabled: true,
+			url: `http://127.0.0.1:${proxyAddress.port}`,
+			forAi: false,
+			forVoice: true,
+			forSync: false,
+			forWeb: false,
+		});
+		const dispatcher = undici.getGlobalDispatcher();
+		try {
+			const originUrl = `http://127.0.0.1:${originAddress.port}/test`;
+			await expect(runWithProxyScope("ai", () => undici.fetch(originUrl).then((r) => r.text()))).resolves.toBe(
+				"direct-ok",
+			);
+			expect(proxyRequestLines).toHaveLength(0);
+
+			await expect(runWithProxyScope("voice", () => undici.fetch(originUrl).then((r) => r.text()))).resolves.toBe(
+				"direct-ok",
+			);
+			expect(proxyRequestLines).toHaveLength(1);
+		} finally {
+			await dispatcher.close();
+			undici.setGlobalDispatcher(originalDispatcher);
+			await Promise.all([
+				new Promise<void>((resolve) => proxy.close(() => resolve())),
+				new Promise<void>((resolve) => origin.close(() => resolve())),
+			]);
+		}
 	});
 });

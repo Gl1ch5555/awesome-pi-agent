@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { runWithProxyScope } from "../http-dispatcher.ts";
 import type { SearchProviderId, SearchSettings } from "../settings-schema.ts";
 
 export interface SearchProviderMeta {
@@ -182,7 +183,7 @@ function stripTags(html: string): string {
 async function fetchJson(url: string, init: RequestInit, signal?: AbortSignal): Promise<any> {
 	const timeoutSignal = AbortSignal.timeout(20_000);
 	const mergedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-	const res = await fetch(url, { ...init, signal: mergedSignal });
+	const res = await runWithProxyScope("web", () => fetch(url, { ...init, signal: mergedSignal }));
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
 		throw new Error(`HTTP ${res.status} ${res.statusText}${body ? `: ${body.slice(0, 240)}` : ""}`);
@@ -193,7 +194,7 @@ async function fetchJson(url: string, init: RequestInit, signal?: AbortSignal): 
 async function fetchText(url: string, init: RequestInit, signal?: AbortSignal): Promise<string> {
 	const timeoutSignal = AbortSignal.timeout(20_000);
 	const mergedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-	const res = await fetch(url, { ...init, signal: mergedSignal });
+	const res = await runWithProxyScope("web", () => fetch(url, { ...init, signal: mergedSignal }));
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
 		throw new Error(`HTTP ${res.status} ${res.statusText}${body ? `: ${body.slice(0, 240)}` : ""}`);

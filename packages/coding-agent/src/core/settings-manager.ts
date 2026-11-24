@@ -20,6 +20,7 @@ import type {
 	MemorySettings,
 	MermaidRenderingMode,
 	PackageSource,
+	ProxySettings,
 	QuietStartup,
 	SearchProviderId,
 	SearchSettings,
@@ -1550,6 +1551,53 @@ export class SettingsManager {
 		if (patch.chunkIntervalMs !== undefined) {
 			this.globalSettings.voice.chunkIntervalMs = patch.chunkIntervalMs;
 			this.markModified("voice", "chunkIntervalMs");
+		}
+		this.save();
+	}
+
+	getProxySettings(): ProxySettings {
+		const configured = this.globalSettings.proxy ?? this.settings.proxy;
+		const legacyUrl = this.globalSettings.httpProxy?.trim() || undefined;
+		return {
+			enabled: configured?.enabled ?? SETTINGS_DEFAULTS.proxy.enabled,
+			url: configured?.url?.trim() || legacyUrl,
+			forAi: configured?.forAi ?? SETTINGS_DEFAULTS.proxy.forAi,
+			forVoice: configured?.forVoice ?? SETTINGS_DEFAULTS.proxy.forVoice,
+			forSync: configured?.forSync ?? SETTINGS_DEFAULTS.proxy.forSync,
+			forWeb: configured?.forWeb ?? SETTINGS_DEFAULTS.proxy.forWeb,
+		};
+	}
+
+	setProxySettings(patch: Partial<ProxySettings>): void {
+		this.globalSettings.proxy ??= {};
+		if (patch.enabled !== undefined) {
+			this.globalSettings.proxy.enabled = patch.enabled;
+			this.markModified("proxy", "enabled");
+		}
+		if ("url" in patch) {
+			const trimmed = patch.url?.trim() || undefined;
+			this.globalSettings.proxy.url = trimmed;
+			this.markModified("proxy", "url");
+			if (!trimmed && this.globalSettings.httpProxy) {
+				this.globalSettings.httpProxy = undefined;
+				this.markModified("httpProxy");
+			}
+		}
+		if (patch.forAi !== undefined) {
+			this.globalSettings.proxy.forAi = patch.forAi;
+			this.markModified("proxy", "forAi");
+		}
+		if (patch.forVoice !== undefined) {
+			this.globalSettings.proxy.forVoice = patch.forVoice;
+			this.markModified("proxy", "forVoice");
+		}
+		if (patch.forSync !== undefined) {
+			this.globalSettings.proxy.forSync = patch.forSync;
+			this.markModified("proxy", "forSync");
+		}
+		if (patch.forWeb !== undefined) {
+			this.globalSettings.proxy.forWeb = patch.forWeb;
+			this.markModified("proxy", "forWeb");
 		}
 		this.save();
 	}

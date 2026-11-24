@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "../config.ts";
+import { runWithProxyScope } from "./http-dispatcher.ts";
 import { stripBom } from "../utils/text.ts";
 
 export const DEFAULT_CLOUD_SYNC_URL = "https://grzxk.ru/pi-sync";
@@ -380,11 +381,13 @@ async function syncRequest(url: string, init: RequestInit, externalSignal?: Abor
 		if (!headers.has("Connection")) {
 			headers.set("Connection", "close");
 		}
-		const fetchPromise = fetch(url, {
-			...init,
-			headers,
-			signal: controller.signal,
-		});
+		const fetchPromise = runWithProxyScope("sync", () =>
+			fetch(url, {
+				...init,
+				headers,
+				signal: controller.signal,
+			}),
+		);
 		const racers: Promise<Response>[] = [fetchPromise, timeoutPromise];
 		if (cancelPromise) racers.push(cancelPromise);
 		const res = await Promise.race(racers);

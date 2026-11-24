@@ -147,8 +147,11 @@ async function runAuthLoginCommand(args: string[]): Promise<number> {
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
 	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
-	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+	const initialProxy = settingsManager.getProxySettings();
+	if (!settingsManager.getGlobalSettings().proxy?.url && settingsManager.getGlobalSettings().proxy?.enabled === undefined) {
+		applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
+	}
+	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs(), initialProxy);
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal: AbortSignal.timeout(15_000) });
 
 	const controller = new AbortController();
@@ -652,8 +655,14 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	const agentDir = getAgentDir();
 	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
-	configureHttpDispatcher();
+	const bootstrapProxy = bootstrapSettingsManager.getProxySettings();
+	if (
+		!bootstrapSettingsManager.getGlobalSettings().proxy?.url &&
+		bootstrapSettingsManager.getGlobalSettings().proxy?.enabled === undefined
+	) {
+		applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
+	}
+	configureHttpDispatcher(undefined, bootstrapProxy);
 
 	if (await handlePackageCommand(args, { extensionFactories })) {
 		const exitCode = process.exitCode ?? 0;
@@ -951,8 +960,11 @@ export async function main(args: string[], options?: MainOptions) {
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	setCapabilityOverrides(settingsManager.getTerminalCapabilityOverrides());
-	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
-	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+	const runtimeProxy = settingsManager.getProxySettings();
+	if (!settingsManager.getGlobalSettings().proxy?.url && settingsManager.getGlobalSettings().proxy?.enabled === undefined) {
+		applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
+	}
+	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs(), runtimeProxy);
 
 	const startupDiagnostics = deduplicateDiagnostics([...startupSettingsDiagnostics, ...runtime.diagnostics]);
 	const hasRuntimeErrors = runtime.diagnostics.some((diagnostic) => diagnostic.type === "error");

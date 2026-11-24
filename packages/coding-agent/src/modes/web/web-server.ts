@@ -22,6 +22,7 @@ import {
 	upsertCustomProvider,
 } from "../../core/custom-providers.ts";
 import { clearMemoryTarget, MEMORY_CHAR_LIMITS, readMemorySnapshot } from "../../core/memory-store.ts";
+import { configureHttpDispatcher, runWithProxyScope, testProxyConnection } from "../../core/http-dispatcher.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getAvailableThemes } from "../interactive/theme/theme.ts";
@@ -627,15 +628,17 @@ export class PiWebServer {
 				form.append("file", new Blob([buf], { type: mimeType }), `voice.${ext}`);
 				form.append("model", "whisper-large-v3");
 				form.append("language", "ru");
-				const groqRes = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${groqKey}`,
-						"User-Agent": "pi-awesome/1.5.2",
-						Accept: "application/json",
-					},
-					body: form,
-				});
+				const groqRes = await runWithProxyScope("voice", () =>
+					fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${groqKey}`,
+							"User-Agent": "pi-awesome/1.5.2",
+							Accept: "application/json",
+						},
+						body: form,
+					}),
+				);
 				if (!groqRes.ok) {
 					this.sendJson(res, 200, { fallback: true, error: `Groq HTTP ${groqRes.status}` });
 					return;
@@ -791,6 +794,7 @@ export class PiWebServer {
 					enabled: voice.enabled !== false,
 					holdSpaceToTalk: voice.holdSpaceToTalk !== false,
 				},
+				proxy: sm.getProxySettings(),
 				memory: {
 					enabled: memSettings.reviewEnabled !== false,
 					nudgeInterval: memSettings.nudgeInterval ?? 10,
@@ -841,6 +845,10 @@ export class PiWebServer {
 			if (body.voice && typeof body.voice === "object") {
 				sm.setVoiceSettings(body.voice as any);
 			}
+			if (body.proxy && typeof body.proxy === "object") {
+				sm.setProxySettings(body.proxy as any);
+				configureHttpDispatcher(sm.getHttpIdleTimeoutMs(), sm.getProxySettings());
+			}
 			if (body.memory && typeof body.memory === "object") {
 				sm.setMemorySettings(body.memory as any);
 			}
@@ -859,6 +867,14 @@ export class PiWebServer {
 			this.triggerBackgroundSync();
 			this.broadcastRaw({ type: "session_changed" });
 			this.sendJson(res, 200, { ok: true });
+			return;
+		}
+
+		if (req.method === "POST" && pathname === "/api/proxy/test") {
+			const body = await this.readJsonBody(req);
+			const url = typeof body.url === "string" ? body.url : (this.session.settingsManager.getProxySettings().url ?? "");
+			const result = await testProxyConnection(url);
+			this.sendJson(res, 200, result);
 			return;
 		}
 

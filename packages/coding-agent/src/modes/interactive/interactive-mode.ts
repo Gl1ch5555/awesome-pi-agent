@@ -2273,7 +2273,7 @@ export class InteractiveMode {
 	private applyRuntimeSettings(): void {
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		this.ensurePngTranscoder();
-		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
+		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs(), this.settingsManager.getProxySettings());
 		this.applyFullscreenScrollbarSetting();
 		if (this.renderer instanceof TuiAltScreen) {
 			this.renderer.setCopyOnSelect(this.settingsManager.getFullscreenCopyOnSelect());
@@ -5390,6 +5390,7 @@ export class InteractiveMode {
 					fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
 					warnings: this.settingsManager.getWarnings(),
 					voice: this.settingsManager.getVoiceSettings(),
+					proxy: this.settingsManager.getProxySettings(),
 					search: this.settingsManager.getSearchSettings(),
 					memory: this.settingsManager.getMemorySettings(),
 					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
@@ -5582,6 +5583,14 @@ export class InteractiveMode {
 						this.settingsManager.setVoiceSettings(patch);
 						const vs = this.settingsManager.getVoiceSettings();
 						this.defaultEditor.setVoiceHoldEnabled(vs.enabled !== false && vs.holdSpaceToTalk !== false);
+					},
+					onProxySettingsChange: (patch) => {
+						this.settingsManager.setProxySettings(patch);
+						configureHttpDispatcher(
+							this.settingsManager.getHttpIdleTimeoutMs(),
+							this.settingsManager.getProxySettings(),
+						);
+						this.triggerAutoSyncPush();
 					},
 					onSearchProviderChange: (provider) => {
 						this.settingsManager.setSearchProvider(provider);
@@ -5783,6 +5792,7 @@ export class InteractiveMode {
 		}
 		const vs = this.settingsManager.getVoiceSettings();
 		this.defaultEditor.setVoiceHoldEnabled(vs.enabled !== false && vs.holdSpaceToTalk !== false);
+		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs(), this.settingsManager.getProxySettings());
 		await this.updateAvailableProviderCount();
 		this.footer.invalidate();
 		this.updateEditorBorderColor();

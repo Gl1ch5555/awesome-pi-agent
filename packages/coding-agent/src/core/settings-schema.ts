@@ -242,6 +242,47 @@ const MemoryReviewModeSchema = Type.Union([Type.Literal("auto"), Type.Literal("d
 		'Context strategy for background memory review: "auto" replays the session prefix (warm prompt cache), "digest" collapses older turns into a compact summary.',
 });
 
+const ProxySettingsSchema = Type.Object(
+	{
+		enabled: Type.Optional(
+			Type.Boolean({
+				description: "Enable proxy routing for selected traffic scopes.",
+				default: SETTINGS_DEFAULTS.proxy.enabled,
+			}),
+		),
+		url: Type.Optional(
+			Type.String({
+				description: "Proxy URL (http://, https://, socks5://, or socks5h://).",
+			}),
+		),
+		forAi: Type.Optional(
+			Type.Boolean({
+				description: "Route AI model API requests through the proxy.",
+				default: SETTINGS_DEFAULTS.proxy.forAi,
+			}),
+		),
+		forVoice: Type.Optional(
+			Type.Boolean({
+				description: "Route voice input (Groq Whisper) requests through the proxy.",
+				default: SETTINGS_DEFAULTS.proxy.forVoice,
+			}),
+		),
+		forSync: Type.Optional(
+			Type.Boolean({
+				description: "Route Cloud Sync requests through the proxy.",
+				default: SETTINGS_DEFAULTS.proxy.forSync,
+			}),
+		),
+		forWeb: Type.Optional(
+			Type.Boolean({
+				description: "Route web search, web fetch, and update requests through the proxy.",
+				default: SETTINGS_DEFAULTS.proxy.forWeb,
+			}),
+		),
+	},
+	{ additionalProperties: true },
+);
+
 const WebUiSettingsSchema = Type.Object({
 	enabled: Type.Optional(
 		Type.Boolean({
@@ -579,6 +620,7 @@ export const SettingsSchema = Type.Object(
 		httpProxy: Type.Optional(
 			Type.String({ description: "Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients." }),
 		),
+		proxy: Type.Optional(ProxySettingsSchema),
 		httpIdleTimeoutMs: Type.Optional(
 			timeoutSetting({
 				description: 'HTTP header or body idle timeout in milliseconds; 0 or "disabled" disables it.',
@@ -662,6 +704,7 @@ export type TuiStyle = Static<typeof TuiStyleSchema>;
 export type MemoryReviewMode = Static<typeof MemoryReviewModeSchema>;
 export interface MemorySettings extends Static<typeof MemorySettingsSchema> {}
 export interface WebUiSettings extends Static<typeof WebUiSettingsSchema> {}
+export interface ProxySettings extends Static<typeof ProxySettingsSchema> {}
 export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}

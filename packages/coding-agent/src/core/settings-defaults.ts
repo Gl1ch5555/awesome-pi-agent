@@ -89,6 +89,13 @@ export const SETTINGS_DEFAULTS = {
 		port: 30141,
 		host: "127.0.0.1",
 	},
+	proxy: {
+		enabled: false,
+		forAi: true,
+		forVoice: true,
+		forSync: false,
+		forWeb: false,
+	},
 	autoUpdate: "auto",
 	onboardingCompleted: false,
 } as const;

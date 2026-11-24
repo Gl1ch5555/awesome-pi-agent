@@ -863,6 +863,41 @@
       "type": "string",
       "description": "Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients."
     },
+    "proxy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable proxy routing for selected traffic scopes.",
+          "default": false
+        },
+        "url": {
+          "type": "string",
+          "description": "Proxy URL (http://, https://, socks5://, or socks5h://)."
+        },
+        "forAi": {
+          "type": "boolean",
+          "description": "Route AI model API requests through the proxy.",
+          "default": true
+        },
+        "forVoice": {
+          "type": "boolean",
+          "description": "Route voice input (Groq Whisper) requests through the proxy.",
+          "default": true
+        },
+        "forSync": {
+          "type": "boolean",
+          "description": "Route Cloud Sync requests through the proxy.",
+          "default": false
+        },
+        "forWeb": {
+          "type": "boolean",
+          "description": "Route web search, web fetch, and update requests through the proxy.",
+          "default": false
+        }
+      },
+      "additionalProperties": true
+    },
     "httpIdleTimeoutMs": {
       "anyOf": [
         {

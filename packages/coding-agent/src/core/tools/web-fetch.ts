@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { runWithProxyScope } from "../http-dispatcher.ts";
 import type { SearchSettings } from "../settings-schema.ts";
 import { resolveSearchApiKey } from "./web-search.ts";
 
@@ -69,12 +70,14 @@ export function createWebFetchToolDefinition(
 			const tavilyKey = resolveSearchApiKey("tavily", settings);
 			if (tavilyKey) {
 				try {
-					const res = await fetch("https://api.tavily.com/extract", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ api_key: tavilyKey, urls: [url] }),
-						signal: mergedSignal,
-					});
+					const res = await runWithProxyScope("web", () =>
+						fetch("https://api.tavily.com/extract", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({ api_key: tavilyKey, urls: [url] }),
+							signal: mergedSignal,
+						}),
+					);
 					if (res.ok) {
 						const data = (await res.json()) as { results?: Array<{ raw_content?: string; content?: string }> };
 						const content = data.results?.[0]?.raw_content ?? data.results?.[0]?.content;
@@ -93,7 +96,9 @@ export function createWebFetchToolDefinition(
 					const jinaKey = resolveSearchApiKey("jina", settings);
 					const headers: Record<string, string> = { Accept: "text/plain" };
 					if (jinaKey) headers.Authorization = `Bearer ${jinaKey}`;
-					const res = await fetch(`https://r.jina.ai/${url}`, { headers, signal: mergedSignal });
+					const res = await runWithProxyScope("web", () =>
+						fetch(`https://r.jina.ai/${url}`, { headers, signal: mergedSignal }),
+					);
 					if (res.ok) {
 						const text = await res.text();
 						if (text.trim().length > 0) {
@@ -107,13 +112,15 @@ export function createWebFetchToolDefinition(
 			}
 
 			if (!extracted) {
-				const res = await fetch(url, {
-					headers: {
-						"User-Agent": "Mozilla/5.0 (compatible; pi-coding-agent/1.5)",
-						Accept: "text/html,application/xhtml+xml,text/plain,application/json",
-					},
-					signal: mergedSignal,
-				});
+				const res = await runWithProxyScope("web", () =>
+					fetch(url, {
+						headers: {
+							"User-Agent": "Mozilla/5.0 (compatible; pi-coding-agent/1.5)",
+							Accept: "text/html,application/xhtml+xml,text/plain,application/json",
+						},
+						signal: mergedSignal,
+					}),
+				);
 				if (!res.ok) {
 					throw new Error(`Failed to fetch ${url}: HTTP ${res.status} ${res.statusText}`);
 				}

@@ -13,7 +13,10 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getPackageDir } from "../config.ts";
+import { runWithProxyScope } from "./http-dispatcher.ts";
 import { isNewerPackageVersion } from "../utils/version-check.ts";
+
+const webFetch: typeof fetch = (input, init) => runWithProxyScope("web", () => fetch(input, init));
 
 export const AWESOME_PI_REPO = "Gl1ch5555/awesome-pi-agent";
 const RELEASE_BASE_URL = `https://github.com/${AWESOME_PI_REPO}/releases/download/latest`;
@@ -116,7 +119,7 @@ export async function checkGithubUpdate(currentVersion: string): Promise<GithubU
 
 	try {
 		// Prefer release version.json first (no GitHub REST API rate limits)
-		const relRes = await fetch(`${RELEASE_VERSION_URL}?t=${Date.now()}`, {
+		const relRes = await webFetch(`${RELEASE_VERSION_URL}?t=${Date.now()}`, {
 			headers: { "User-Agent": headers["User-Agent"]! },
 			signal: AbortSignal.timeout(6000),
 		}).catch(() => undefined);
@@ -133,8 +136,8 @@ export async function checkGithubUpdate(currentVersion: string): Promise<GithubU
 
 		if (!remoteSha) {
 			const [commitRes, pkgRes] = await Promise.all([
-				fetch(GITHUB_COMMITS_URL, { headers, signal: AbortSignal.timeout(8000) }),
-				fetch(`${GITHUB_PACKAGE_JSON_URL}?t=${Date.now()}`, {
+				webFetch(GITHUB_COMMITS_URL, { headers, signal: AbortSignal.timeout(8000) }),
+				webFetch(`${GITHUB_PACKAGE_JSON_URL}?t=${Date.now()}`, {
 					headers: { "User-Agent": headers["User-Agent"]! },
 					signal: AbortSignal.timeout(8000),
 				}).catch(() => undefined),
@@ -290,7 +293,7 @@ async function downloadRangeChunkWithResume(
 
 		const reqStart = start + have;
 		try {
-			const res = await fetch(url, {
+			const res = await webFetch(url, {
 				headers: { ...headers, Range: `bytes=${reqStart}-${end}` },
 				signal: AbortSignal.timeout(60_000),
 			});
@@ -338,7 +341,7 @@ async function downloadWithResume(
 
 	// Try 4-stream parallel Range download when supported (much faster on mobile/VPN links).
 	try {
-		const headRes = await fetch(url, { method: "HEAD", headers, signal: AbortSignal.timeout(15_000) });
+		const headRes = await webFetch(url, { method: "HEAD", headers, signal: AbortSignal.timeout(15_000) });
 		if (headRes.ok) {
 			const lenStr = headRes.headers.get("content-length");
 			const acceptRanges = headRes.headers.get("accept-ranges")?.toLowerCase();
@@ -394,7 +397,7 @@ async function downloadWithResume(
 		}
 
 		try {
-			const res = await fetch(url, {
+			const res = await webFetch(url, {
 				headers: reqHeaders,
 				signal: AbortSignal.timeout(90_000),
 			});
@@ -584,7 +587,7 @@ export async function performGithubSelfUpdate(
 		const archiveUrl = isWin ? GITHUB_ZIP_URL : GITHUB_TARBALL_URL;
 		const archivePath = join(tempDir, isWin ? "update.zip" : "update.tar.gz");
 
-		const res = await fetch(archiveUrl, { headers, signal: AbortSignal.timeout(60_000) });
+		const res = await webFetch(archiveUrl, { headers, signal: AbortSignal.timeout(60_000) });
 		if (!res.ok) {
 			throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
 		}

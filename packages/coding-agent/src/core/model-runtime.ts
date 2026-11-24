@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { runWithProxyScope } from "./http-dispatcher.ts";
 import {
 	type AnyModel,
 	type Api,
@@ -720,14 +721,15 @@ export class ModelRuntime implements Models {
 		const transcript = normalizeContext(context);
 		return lazyStream(
 			model,
-			async () => {
-				assertChatModel(model);
-				const prepared = await this.prepareRequest(
-					model,
-					options as (StreamOptions & ModelsRequestTransforms) | undefined,
-				);
-				return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
-			},
+			async () =>
+				runWithProxyScope("ai", async () => {
+					assertChatModel(model);
+					const prepared = await this.prepareRequest(
+						model,
+						options as (StreamOptions & ModelsRequestTransforms) | undefined,
+					);
+					return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
+				}),
 			undefined,
 			options?.signal,
 		);
@@ -770,11 +772,12 @@ export class ModelRuntime implements Models {
 		}
 		return lazyStream(
 			model,
-			async () => {
-				assertChatModel(model);
-				const prepared = await this.prepareRequest(model, options);
-				return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
-			},
+			async () =>
+				runWithProxyScope("ai", async () => {
+					assertChatModel(model);
+					const prepared = await this.prepareRequest(model, options);
+					return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
+				}),
 			undefined,
 			options?.signal,
 		);

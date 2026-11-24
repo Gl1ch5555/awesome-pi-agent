@@ -12,7 +12,8 @@ import {
 	Text,
 	type WheelScrollLines,
 } from "@earendil-works/pi-tui";
-import { formatHttpIdleTimeoutMs, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
+import { formatHttpIdleTimeoutMs, formatProxySummary, HTTP_IDLE_TIMEOUT_CHOICES } from "../../../core/http-dispatcher.ts";
+import type { ProxySettings } from "../../../core/settings-schema.ts";
 import { SETTINGS_DEFAULTS } from "../../../core/settings-defaults.ts";
 import {
 	type AutoUpdateMode,
@@ -43,6 +44,7 @@ import {
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyDisplayText } from "./keybinding-hints.ts";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
+import { ProxySettingsSubmenu } from "./proxy-settings.ts";
 import { SearchSettingsSubmenu, VoiceSettingsSubmenu } from "./voice-search-settings.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };
@@ -111,6 +113,7 @@ export interface SettingsConfig {
 	fullscreenWheelScrollLines: WheelScrollLines;
 	warnings: WarningSettings;
 	voice?: VoiceSettings;
+	proxy?: ProxySettings;
 	search?: SearchSettings;
 	memory?: Required<MemorySettings>;
 	codemodeEnabled?: boolean;
@@ -160,6 +163,7 @@ export interface SettingsCallbacks {
 	onFullscreenWheelScrollLinesChange: (lines: WheelScrollLines) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onVoiceSettingsChange?: (patch: Partial<VoiceSettings>) => void;
+	onProxySettingsChange?: (patch: Partial<ProxySettings>) => void;
 	onSearchProviderChange?: (provider: SearchProviderId) => void;
 	onSearchApiKeyChange?: (provider: string, apiKey: string | undefined) => void;
 	onSearchExtrasChange?: (extras: { enabled?: boolean; searxngUrl?: string; googleCseId?: string }) => void;
@@ -800,6 +804,22 @@ export class SettingsSelectorComponent extends Container {
 							callbacks.onVoiceSettingsChange?.(patch);
 						},
 						() => done(),
+					),
+			},
+			{
+				id: "proxy",
+				label: "Proxy",
+				description: "Step-by-step proxy setup and per-feature toggles (AI, Voice, Sync, Web)",
+				currentValue: formatProxySummary(config.proxy),
+				submenu: (_currentValue, done) =>
+					new ProxySettingsSubmenu(
+						config.proxy ?? { enabled: false, forAi: true, forVoice: true, forSync: false, forWeb: false },
+						(patch) => {
+							config.proxy ??= {};
+							Object.assign(config.proxy, patch);
+							callbacks.onProxySettingsChange?.(patch);
+						},
+						() => done(formatProxySummary(config.proxy)),
 					),
 			},
 			{
