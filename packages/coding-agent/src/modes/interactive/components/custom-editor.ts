@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
 import type { TuiStyle } from "../../../core/settings-manager.ts";
+import { theme } from "../theme/theme.ts";
 import type { StatusIndicator } from "./status-indicator.ts";
 
 export interface EditorBorderMetadata {
@@ -178,7 +179,7 @@ export class CustomEditor extends Editor {
 	}
 
 	protected override renderTopBorder(width: number, hiddenLineCount: number): string {
-		if (this.tuiStyle === "compact" && width >= 20 && !this.workingStatusIndicator) {
+		if ((this.tuiStyle === "compact" || this.tuiStyle === "claude-code") && width >= 20 && !this.workingStatusIndicator) {
 			const meta = this.borderMetaProvider?.();
 			const left = hiddenLineCount > 0 ? this.borderColor(`↑ ${hiddenLineCount} more`) : undefined;
 			return this.buildLabeledBorder(width, "──", "──", left, meta?.rightTop);
@@ -229,7 +230,7 @@ export class CustomEditor extends Editor {
 
 	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
 		let border: string;
-		if (this.tuiStyle === "compact" && width >= 20) {
+		if ((this.tuiStyle === "compact" || this.tuiStyle === "claude-code") && width >= 20) {
 			const meta = this.borderMetaProvider?.();
 			const right =
 				hiddenLineCount > 0 ? this.borderColor(`↓ ${hiddenLineCount} more`) : meta?.rightBottom;
@@ -242,6 +243,40 @@ export class CustomEditor extends Editor {
 	}
 
 	override render(width: number): string[] {
+		if (this.tuiStyle === "claude-code" && width >= 20) {
+			const innerWidth = Math.max(1, width - 2);
+			const lines = super.render(innerWidth);
+			if (lines.length < 2) {
+				return lines;
+			}
+			const meta = this.borderMetaProvider?.();
+			let topLeftLabel: string | undefined;
+			if (this.embedWorkingStatus && this.workingStatusIndicator) {
+				topLeftLabel = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 6));
+			}
+			const topBorder = this.buildLabeledBorder(width, "──", "──", topLeftLabel, meta?.rightTop);
+			const bottomBorder = this.buildLabeledBorder(width, "──", "──", meta?.leftBottom, meta?.rightBottom);
+
+			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+			const bodyStart = 1;
+			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+
+			const result: string[] = [topBorder];
+			const promptPrefix = theme.fg("accent", "❯ ");
+			for (let i = bodyStart; i < bodyEnd; i++) {
+				const line = lines[i] ?? "";
+				const prefix = i === bodyStart ? promptPrefix : "  ";
+				const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+				result.push(`${prefix}${line}${pad}`);
+			}
+			result.push(bottomBorder);
+
+			for (let i = bodyEnd + 1; i < lines.length; i++) {
+				result.push(`  ${lines[i] ?? ""}`);
+			}
+			return result;
+		}
+
 		if ((this.tuiStyle !== "rounded" && this.tuiStyle !== "opentui") || width < 20) {
 			return super.render(width);
 		}

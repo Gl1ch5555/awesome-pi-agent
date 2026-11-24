@@ -976,9 +976,13 @@
         {
           "type": "string",
           "const": "sageveil"
+        },
+        {
+          "type": "string",
+          "const": "claude-code"
         }
       ],
-      "description": "Interactive TUI layout preset: native, rounded, compact, opentui, or sageveil."
+      "description": "Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, or claude-code."
     },
     "themeAccent": {
       "anyOf": [

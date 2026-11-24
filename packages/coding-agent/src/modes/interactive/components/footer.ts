@@ -325,6 +325,16 @@ export class FooterComponent implements Component {
 			// CWD, model, and context% are embedded in the editor border; keep footer ultra-compact.
 			const compactStats = statsParts.slice(0, -1).join(" ");
 			lines = compactStats ? [truncateToWidth(theme.fg("dim", compactStats), width, theme.fg("dim", "..."))] : [];
+		} else if (this.tuiStyle === "claude-code") {
+			const leftPart = theme.fg("muted", pwd);
+			const rightText = rightSide ? `${rightSide}` : "";
+			const leftMax = Math.max(10, width - visibleWidth(rightText) - 2);
+			const leftTrimmed = truncateToWidth(leftPart, leftMax, theme.fg("dim", "..."));
+			const gap = Math.max(1, width - visibleWidth(leftTrimmed) - visibleWidth(rightText));
+			const topRow = rightText
+				? `${leftTrimmed}${" ".repeat(gap)}${theme.fg("muted", rightText)}`
+				: leftTrimmed;
+			lines = [topRow];
 		} else if (this.tuiStyle === "sageveil") {
 			const pill = `${theme.bg("selectedBg", theme.fg("accent", " π "))} ${theme.fg("text", pwd)}`;
 			const topRow =

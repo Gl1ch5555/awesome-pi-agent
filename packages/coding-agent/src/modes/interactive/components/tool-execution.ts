@@ -11,6 +11,7 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext, ToolRenderers } from "../../../core/extensions/types.ts";
+import type { TuiStyle } from "../../../core/settings-schema.ts";
 
 /** What this component needs from a tool: how to draw it, without executing it. */
 export type { ToolRenderers };
@@ -63,6 +64,7 @@ export class ToolExecutionComponent extends Container {
 		durationMs?: number;
 	};
 	private hideComponent = false;
+	private tuiStyle: TuiStyle = "native";
 
 	constructor(
 		toolName: string,
@@ -278,13 +280,21 @@ export class ToolExecutionComponent extends Container {
 		});
 	}
 
+	setTuiStyle(style: TuiStyle): void {
+		this.tuiStyle = style;
+		this.updateDisplay();
+	}
+
 	private updateDisplay(): void {
 		this.argsPending = false;
-		const bgFn = this.isPartial
-			? (text: string) => theme.bg("toolPendingBg", text)
-			: this.result?.isError
-				? (text: string) => theme.bg("toolErrorBg", text)
-				: (text: string) => theme.bg("toolSuccessBg", text);
+		const bgFn =
+			this.tuiStyle === "claude-code"
+				? (text: string) => text
+				: this.isPartial
+					? (text: string) => theme.bg("toolPendingBg", text)
+					: this.result?.isError
+						? (text: string) => theme.bg("toolErrorBg", text)
+						: (text: string) => theme.bg("toolSuccessBg", text);
 
 		let hasContent = false;
 		this.hideComponent = false;

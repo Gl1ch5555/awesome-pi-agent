@@ -231,9 +231,10 @@ const TuiStyleSchema = Type.Union(
 		Type.Literal("compact"),
 		Type.Literal("opentui"),
 		Type.Literal("sageveil"),
+		Type.Literal("claude-code"),
 	],
 	{
-		description: "Interactive TUI layout preset: native, rounded, compact, opentui, or sageveil.",
+		description: "Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, or claude-code.",
 	},
 );
 

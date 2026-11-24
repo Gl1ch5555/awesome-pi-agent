@@ -9,6 +9,7 @@ import {
 	Text,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type { TuiStyle } from "../../../core/settings-schema.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
@@ -42,6 +43,7 @@ export class AssistantMessageComponent extends Container {
 	private timestamp?: string;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	private markdownSlots: MarkdownSlot[] = [];
+	private tuiStyle: TuiStyle = "native";
 
 	constructor(
 		message?: AssistantMessage,
@@ -82,6 +84,13 @@ export class AssistantMessageComponent extends Container {
 	setHideThinkingBlock(hide: boolean): void {
 		this.hideThinkingBlock = hide;
 		this.thinkingVisibilityOverrides.clear();
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setTuiStyle(style: TuiStyle): void {
+		this.tuiStyle = style;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -191,14 +200,19 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 				const thinking = thinkingBlocks.join("\n\n");
+				const isClaudeCode = this.tuiStyle === "claude-code";
+				const thinkingText = isClaudeCode
+					? `${this.isStreaming ? "∴ Thinking…" : "∴ Thought"}\n\n${thinking}`
+					: thinking;
+				const collapsedLabel = isClaudeCode ? "∴ Thought (Ctrl+T to expand)" : this.hiddenThinkingLabel;
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					? new Text(theme.italic(theme.fg("thinkingText", collapsedLabel)), this.outputPad, 0)
 					: markdownBlock(
 							"thinking",
-							thinking,
+							thinkingText,
 							() =>
 								new Markdown(
-									thinking,
+									thinkingText,
 									this.outputPad,
 									0,
 									this.markdownTheme,

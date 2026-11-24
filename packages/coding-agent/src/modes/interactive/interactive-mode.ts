@@ -3844,6 +3844,7 @@ export class InteractiveMode {
 						this.outputPad,
 						this.getMarkdownTransformers(),
 					);
+					this.streamingComponent.setTuiStyle(this.settingsManager.getTuiStyle());
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
@@ -3872,6 +3873,7 @@ export class InteractiveMode {
 									this.ui,
 									this.sessionManager.getCwd(),
 								);
+								component.setTuiStyle(this.settingsManager.getTuiStyle());
 								component.setExpanded(this.toolOutputExpanded);
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
@@ -3952,6 +3954,7 @@ export class InteractiveMode {
 						this.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
+					component.setTuiStyle(this.settingsManager.getTuiStyle());
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
@@ -4358,6 +4361,7 @@ export class InteractiveMode {
 					options?.messageId,
 					options?.timestamp,
 				);
+				assistantComponent.setTuiStyle(this.settingsManager.getTuiStyle());
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -4428,6 +4432,7 @@ export class InteractiveMode {
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
+						component.setTuiStyle(this.settingsManager.getTuiStyle());
 						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -5637,6 +5642,11 @@ export class InteractiveMode {
 						this.settingsManager.setTuiStyle(style);
 						this.defaultEditor.setTuiStyle(style);
 						this.footer.setTuiStyle(style);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+								child.setTuiStyle(style);
+							}
+						}
 						this.footer.invalidate();
 						this.ui.requestRender();
 						this.showStatus(`TUI style: ${style}`);
@@ -5649,6 +5659,25 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.ui.requestRender();
 						this.showStatus(`Accent color: ${accent}`);
+						this.triggerAutoSyncPush();
+					},
+					onUiPackChange: (pack) => {
+						this.settingsManager.setTheme(pack.theme);
+						this.settingsManager.setThemeAccent(pack.themeAccent);
+						this.settingsManager.setTuiStyle(pack.tuiStyle);
+						setThemeAccentOverride(pack.themeAccent);
+						this.themeController.setThemeSetting(pack.theme);
+						this.defaultEditor.setTuiStyle(pack.tuiStyle);
+						this.footer.setTuiStyle(pack.tuiStyle);
+						for (const child of this.chatContainer.children) {
+							if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+								child.setTuiStyle(pack.tuiStyle);
+							}
+						}
+						this.updateEditorBorderColor();
+						this.footer.invalidate();
+						this.ui.requestRender();
+						this.showStatus(`UI pack: ${pack.label}`);
 						this.triggerAutoSyncPush();
 					},
 					onAutoUpdateChange: (mode) => {

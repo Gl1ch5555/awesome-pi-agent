@@ -45,6 +45,7 @@ import { DynamicBorder } from "./dynamic-border.ts";
 import { keyDisplayText } from "./keybinding-hints.ts";
 import { SelectSubmenu, SteppedSubmenu, type SteppedSubmenuStep } from "./settings-submenu.ts";
 import { ProxySettingsSubmenu } from "./proxy-settings.ts";
+import { detectUiPack, getUiPackById, UI_PACKS, type UiPack } from "./ui-packs.ts";
 import { SearchSettingsSubmenu, VoiceSettingsSubmenu } from "./voice-search-settings.ts";
 
 const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };
@@ -174,6 +175,7 @@ export interface SettingsCallbacks {
 	onWebUiEnabledChange?: (enabled: boolean) => void;
 	onTuiStyleChange?: (style: TuiStyle) => void;
 	onThemeAccentChange?: (accent: ThemeAccent) => void;
+	onUiPackChange?: (pack: UiPack) => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -901,6 +903,38 @@ export class SettingsSelectorComponent extends Container {
 				values: ["auto", "notify", "off"],
 			},
 			{
+				id: "ui-pack",
+				label: "UI pack",
+				description: "Ready-made bundle: theme + accent + TUI layout in one click",
+				currentValue: detectUiPack(
+					config.currentTheme,
+					config.themeAccent ?? SETTINGS_DEFAULTS.themeAccent,
+					config.tuiStyle ?? SETTINGS_DEFAULTS.tuiStyle,
+				),
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"UI Pack",
+						"Select a complete visual preset (applies theme, accent color, and TUI style)",
+						UI_PACKS.map((p) => ({
+							value: p.id,
+							label: p.label,
+							description: p.description,
+						})),
+						currentValue,
+						(value) => {
+							const pack = getUiPackById(value);
+							if (pack) {
+								config.currentTheme = pack.theme;
+								config.themeAccent = pack.themeAccent;
+								config.tuiStyle = pack.tuiStyle;
+								callbacks.onUiPackChange?.(pack);
+							}
+							done(value);
+						},
+						() => done(),
+					),
+			},
+			{
 				id: "theme",
 				label: "Theme",
 				description: "Color theme for the interface",
@@ -913,7 +947,7 @@ export class SettingsSelectorComponent extends Container {
 				label: "TUI style",
 				description: "Editor & footer layout preset (instant switch)",
 				currentValue: config.tuiStyle ?? SETTINGS_DEFAULTS.tuiStyle,
-				values: ["native", "rounded", "compact", "opentui", "sageveil"],
+				values: ["native", "rounded", "compact", "opentui", "sageveil", "claude-code"],
 			},
 			{
 				id: "theme-accent",

@@ -783,7 +783,7 @@ export class PiWebServer {
 				themeAccent: sm.getThemeAccent(),
 				availableAccents: ["default", "slate", "sage", "amber", "coral", "cyan", "violet", "rose", "mono"],
 				tuiStyle: sm.getTuiStyle(),
-				availableTuiStyles: ["native", "rounded", "compact", "opentui", "sageveil"],
+				availableTuiStyles: ["native", "rounded", "compact", "opentui", "sageveil", "claude-code"],
 				codemodeEnabled: sm.getCodemodeEnabled(),
 				hideThinkingBlock: sm.getHideThinkingBlock(),
 				quietStartup: sm.getQuietStartup(),
