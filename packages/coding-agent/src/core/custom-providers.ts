@@ -171,14 +171,15 @@ export function inferModelMetadata(raw: Record<string, unknown>): DiscoveredProv
 			arch?.context_length,
 		) ?? inferContextWindowById(lower);
 
-	const maxTokens =
-		firstPositiveNumber(
-			raw.max_tokens,
-			raw.max_output_tokens,
-			raw.output_token_limit,
-			limits?.output,
-			topProvider?.max_completion_tokens,
-		) ?? inferMaxTokensById(lower);
+	const discoveredMaxTokens = firstPositiveNumber(
+		raw.max_tokens,
+		raw.max_output_tokens,
+		raw.output_token_limit,
+		limits?.output,
+		topProvider?.max_completion_tokens,
+	);
+	const inferredMaxTokens = inferMaxTokensById(lower);
+	const maxTokens = discoveredMaxTokens ? Math.max(discoveredMaxTokens, inferredMaxTokens) : inferredMaxTokens;
 
 	return {
 		id,

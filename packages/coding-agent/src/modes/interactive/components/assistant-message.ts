@@ -44,6 +44,7 @@ export class AssistantMessageComponent extends Container {
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	private markdownSlots: MarkdownSlot[] = [];
 	private tuiStyle: TuiStyle = "native";
+	private suppressLengthNotice = false;
 
 	constructor(
 		message?: AssistantMessage,
@@ -91,6 +92,14 @@ export class AssistantMessageComponent extends Container {
 
 	setTuiStyle(style: TuiStyle): void {
 		this.tuiStyle = style;
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setSuppressLengthNotice(suppress: boolean): void {
+		if (this.suppressLengthNotice === suppress) return;
+		this.suppressLengthNotice = suppress;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -259,12 +268,12 @@ export class AssistantMessageComponent extends Container {
 		// Length stops can happen before a tool call is complete, so surface them here too.
 		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
 		this.hasToolCalls = hasToolCalls;
-		if (message.stopReason === "length") {
+		if (message.stopReason === "length" && !this.suppressLengthNotice) {
 			this.contentContainer.addChild(new Spacer(1));
 			this.contentContainer.addChild(
 				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
 			);
-		} else if (!hasToolCalls) {
+		} else if (message.stopReason !== "length" && !hasToolCalls) {
 			if (message.stopReason === "aborted") {
 				const abortMessage =
 					message.errorMessage && message.errorMessage !== "Request was aborted"

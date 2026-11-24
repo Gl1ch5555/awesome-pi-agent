@@ -4415,6 +4415,12 @@ export class InteractiveMode {
 							userComponent.setTuiStyle(this.settingsManager.getTuiStyle());
 							this.chatContainer.addChild(userComponent);
 						}
+					} else if (textContent === "Continue from where you stopped without repeating what you already wrote.") {
+						const prevChild = this.chatContainer.children[this.chatContainer.children.length - 1];
+						if (prevChild instanceof AssistantMessageComponent) {
+							prevChild.setSuppressLengthNotice(true);
+						}
+						this.chatContainer.addChild(new Text(theme.fg("dim", "  ↻ Continuing response…"), this.outputPad, 0));
 					} else {
 						const userComponent = new UserMessageComponent(
 							textContent,
