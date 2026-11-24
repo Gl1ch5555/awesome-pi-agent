@@ -424,6 +424,7 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const themesDir = getThemesDir();
 		const names = [
 			"graphite",
+			"claude-code",
 			"dark",
 			"light",
 			"catppuccin-mocha",

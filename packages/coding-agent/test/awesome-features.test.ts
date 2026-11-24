@@ -50,6 +50,12 @@ describe("awesome-pi-agent customizations", () => {
 		expect(theme.appearance).toBe("dark");
 	});
 
+	it("registers claude-code theme as a built-in theme", () => {
+		initTheme("claude-code");
+		expect(theme.name).toBe("claude-code");
+		expect(theme.appearance).toBe("dark");
+	});
+
 	it("binds app.clipboard.pasteImage strictly to ctrl+v on all platforms", () => {
 		const kb = new KeybindingsManager();
 		expect(kb.getKeys("app.clipboard.pasteImage")).toEqual(["ctrl+v"]);
