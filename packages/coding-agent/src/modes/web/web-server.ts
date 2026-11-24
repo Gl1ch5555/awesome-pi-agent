@@ -22,7 +22,7 @@ import {
 	upsertCustomProvider,
 } from "../../core/custom-providers.ts";
 import { clearMemoryTarget, MEMORY_CHAR_LIMITS, readMemorySnapshot } from "../../core/memory-store.ts";
-import { configureHttpDispatcher, runWithProxyScope, testProxyConnection } from "../../core/http-dispatcher.ts";
+import { configureHttpDispatcher, scopedFetch, testProxyConnection } from "../../core/http-dispatcher.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import { getAvailableThemes } from "../interactive/theme/theme.ts";
@@ -628,17 +628,15 @@ export class PiWebServer {
 				form.append("file", new Blob([buf], { type: mimeType }), `voice.${ext}`);
 				form.append("model", "whisper-large-v3");
 				form.append("language", "ru");
-				const groqRes = await runWithProxyScope("voice", () =>
-					fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
-						method: "POST",
-						headers: {
-							Authorization: `Bearer ${groqKey}`,
-							"User-Agent": "pi-awesome/1.5.2",
-							Accept: "application/json",
-						},
-						body: form,
-					}),
-				);
+				const groqRes = await scopedFetch("voice", "https://api.groq.com/openai/v1/audio/transcriptions", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${groqKey}`,
+						"User-Agent": "pi-awesome/1.5.2",
+						Accept: "application/json",
+					},
+					body: form,
+				});
 				if (!groqRes.ok) {
 					this.sendJson(res, 200, { fallback: true, error: `Groq HTTP ${groqRes.status}` });
 					return;

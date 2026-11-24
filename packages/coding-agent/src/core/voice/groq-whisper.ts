@@ -1,5 +1,5 @@
 import type { VoiceModel } from "../settings-schema.ts";
-import { runWithProxyScope } from "../http-dispatcher.ts";
+import { scopedFetch } from "../http-dispatcher.ts";
 import { pcmToWav, VoiceRecorder } from "./voice-recorder.ts";
 
 const GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
@@ -75,16 +75,16 @@ export async function transcribeAudioWithGroq(options: GroqTranscribeOptions): P
 			const timeoutSignal = AbortSignal.timeout(25_000);
 			const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
 
-			const res = await runWithProxyScope("voice", () =>
-				fetch(GROQ_TRANSCRIPTION_URL, {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${options.apiKey}`,
-					},
-					body: form,
-					signal,
-				}),
-			);
+			const res = await scopedFetch("voice", GROQ_TRANSCRIPTION_URL, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${options.apiKey}`,
+					"User-Agent": "pi-awesome/1.5.2",
+					Accept: "application/json",
+				},
+				body: form,
+				signal,
+			});
 
 			if (res.ok) {
 				const data = (await res.json()) as { text?: string };

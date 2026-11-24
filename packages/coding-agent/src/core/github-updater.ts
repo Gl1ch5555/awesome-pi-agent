@@ -13,10 +13,10 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getPackageDir } from "../config.ts";
-import { runWithProxyScope } from "./http-dispatcher.ts";
+import { scopedFetch } from "./http-dispatcher.ts";
 import { isNewerPackageVersion } from "../utils/version-check.ts";
 
-const webFetch: typeof fetch = (input, init) => runWithProxyScope("web", () => fetch(input, init));
+const webFetch: typeof fetch = (input, init) => scopedFetch("web", input as string | URL | Request, init);
 
 export const AWESOME_PI_REPO = "Gl1ch5555/awesome-pi-agent";
 const RELEASE_BASE_URL = `https://github.com/${AWESOME_PI_REPO}/releases/download/latest`;

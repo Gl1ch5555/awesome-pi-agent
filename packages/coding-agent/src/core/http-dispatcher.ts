@@ -27,6 +27,24 @@ export function runWithProxyScope<T>(scope: ProxyScope, fn: () => T): T {
 	return proxyScopeStorage.run(scope, fn);
 }
 
+export function scopedFetch(
+	scope: ProxyScope,
+	input: string | URL | Request,
+	init?: RequestInit,
+): Promise<Response> {
+	return runWithProxyScope(scope, () => {
+		const isDeliberatelyOverridden =
+			globalThis.fetch !== originalGlobalFetch && globalThis.fetch !== installedGlobalFetch;
+		if (isDeliberatelyOverridden) {
+			return globalThis.fetch(input, init);
+		}
+		return undici.fetch(input as undici.RequestInfo, {
+			...(init as undici.RequestInit),
+			dispatcher: undici.getGlobalDispatcher(),
+		}) as unknown as Promise<Response>;
+	});
+}
+
 export function getCurrentProxyScope(): ProxyScope {
 	return proxyScopeStorage.getStore() ?? "other";
 }
@@ -268,9 +286,21 @@ export async function testProxyConnection(
 	try {
 		const res = await undici.fetch(targetUrl, {
 			method: "GET",
+			headers: {
+				"User-Agent": "pi-awesome/1.5.2",
+				Accept: "application/json",
+			},
 			dispatcher,
 			signal: AbortSignal.timeout(timeoutMs),
 		});
+		if (res.status === 403 || res.status === 407) {
+			return {
+				ok: false,
+				latencyMs: Date.now() - startedAt,
+				status: res.status,
+				error: res.status === 407 ? "HTTP 407 Proxy Authentication Required" : "HTTP 403 Forbidden (target/geo blocked)",
+			};
+		}
 		return { ok: true, latencyMs: Date.now() - startedAt, status: res.status };
 	} catch (error) {
 		return {

@@ -2,7 +2,7 @@ import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { getModelsPath } from "../config.ts";
-import { runWithProxyScope } from "./http-dispatcher.ts";
+import { scopedFetch } from "./http-dispatcher.ts";
 import { stripJsonComments } from "../utils/json.ts";
 import { stripBom } from "../utils/text.ts";
 import type { ModelsJsonModel, ModelsJsonProvider } from "./model-config.ts";
@@ -239,7 +239,7 @@ export async function fetchProviderModelsCatalog(
 		try {
 			const timeout = AbortSignal.timeout(15_000);
 			const merged = signal ? AbortSignal.any([signal, timeout]) : timeout;
-			const res = await runWithProxyScope("ai", () => fetch(endpoint, { method: "GET", headers, signal: merged }));
+			const res = await scopedFetch("ai", endpoint, { method: "GET", headers, signal: merged });
 			if (!res.ok) {
 				const errBody = await res.text().catch(() => "");
 				lastError = `${endpoint} -> HTTP ${res.status}${errBody ? `: ${errBody.slice(0, 180)}` : ""}`;
