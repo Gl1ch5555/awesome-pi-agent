@@ -253,15 +253,115 @@ export class CustomEditor extends Editor {
 	}
 
 	override render(width: number): string[] {
-		const promptByStyle: Partial<Record<TuiStyle, string>> = {
-			"claude-code": "❯ ",
-			"codex-cli": "› ",
-			"kiro-cli": "  ",
-			"gemini-cli": "> ",
-			opencode: "┃ ",
-		};
-		const rawPrompt = promptByStyle[this.tuiStyle];
-		if (rawPrompt !== undefined && width >= 20) {
+		if (this.tuiStyle === "codex-cli" && width >= 20) {
+			const innerWidth = Math.max(1, width - 4);
+			const lines = super.render(innerWidth);
+			if (lines.length < 2) return lines;
+			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+			const bodyStart = 1;
+			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+			const bgLine = (content: string, len: number) =>
+				theme.bg("userMessageBg", `${content}${" ".repeat(Math.max(0, width - len))}`);
+			const result: string[] = [];
+			if (this.embedWorkingStatus && this.workingStatusIndicator) {
+				const status = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 4));
+				result.push(bgLine(`  ${status}`, 2 + visibleWidth(status)));
+			} else {
+				result.push(theme.bg("userMessageBg", " ".repeat(width)));
+			}
+			for (let i = bodyStart; i < bodyEnd; i++) {
+				const line = lines[i] ?? "";
+				const prefix = i === bodyStart ? theme.fg("accent", "› ") : "  ";
+				result.push(bgLine(`  ${prefix}${line}`, 4 + visibleWidth(line)));
+			}
+			result.push(theme.bg("userMessageBg", " ".repeat(width)));
+			for (let i = bodyEnd + 1; i < lines.length; i++) {
+				result.push(`  ${lines[i] ?? ""}`);
+			}
+			return result;
+		}
+
+		if (this.tuiStyle === "opencode" && width >= 20) {
+			const innerWidth = Math.max(1, width - 3);
+			const lines = super.render(innerWidth);
+			if (lines.length < 2) return lines;
+			const meta = this.borderMetaProvider?.();
+			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+			const bodyStart = 1;
+			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+			const bar = theme.fg("accent", "┃");
+			const panelLine = (content: string, contentWidth: number) =>
+				`${bar}${theme.bg("userMessageBg", `${content}${" ".repeat(Math.max(0, width - 1 - contentWidth))}`)}`;
+			const result: string[] = [panelLine("", 0)];
+			for (let i = bodyStart; i < bodyEnd; i++) {
+				const line = lines[i] ?? "";
+				result.push(panelLine(`  ${line}`, 2 + visibleWidth(line)));
+			}
+			const badgeLeft = `${theme.fg("accent", "Build")} ${theme.fg("dim", "·")} ${meta?.rightTop ?? ""}`;
+			result.push(panelLine(`  ${badgeLeft}`, 2 + visibleWidth(badgeLeft)));
+			result.push(`${theme.fg("accent", "╹")}${theme.fg("borderMuted", "▀".repeat(width - 1))}`);
+			for (let i = bodyEnd + 1; i < lines.length; i++) {
+				result.push(`  ${lines[i] ?? ""}`);
+			}
+			return result;
+		}
+
+		if (this.tuiStyle === "kiro-cli" && width >= 20) {
+			const innerWidth = Math.max(1, width - 2);
+			const lines = super.render(innerWidth);
+			if (lines.length < 2) return lines;
+			const meta = this.borderMetaProvider?.();
+			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+			const bodyStart = 1;
+			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+			const result: string[] = [this.borderColor("─".repeat(width))];
+			const statusLeft = `${theme.fg("accent", "Kiro")} ${theme.fg("dim", "·")} ${meta?.rightTop ?? ""}`;
+			const statusRight = meta?.leftBottom ?? "";
+			const gap = Math.max(1, width - visibleWidth(statusLeft) - visibleWidth(statusRight));
+			result.push(`${statusLeft}${" ".repeat(gap)}${theme.fg("accent", statusRight)}`);
+			for (let i = bodyStart; i < bodyEnd; i++) {
+				const line = lines[i] ?? "";
+				const prefix = i === bodyStart ? theme.fg("accent", "▎ ") : "  ";
+				const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+				result.push(`${prefix}${line}${pad}`);
+			}
+			for (let i = bodyEnd + 1; i < lines.length; i++) {
+				result.push(`  ${lines[i] ?? ""}`);
+			}
+			return result;
+		}
+
+		if (this.tuiStyle === "gemini-cli" && width >= 20) {
+			const innerWidth = Math.max(1, width - 6);
+			const lines = super.render(innerWidth);
+			if (lines.length < 2) return lines;
+			const meta = this.borderMetaProvider?.();
+			let topLeftLabel: string | undefined;
+			if (this.embedWorkingStatus && this.workingStatusIndicator) {
+				topLeftLabel = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 8));
+			}
+			const topBorder = this.buildLabeledBorder(width, "╭─", "─╮", topLeftLabel, meta?.rightTop);
+			const bottomBorder = this.buildLabeledBorder(width, "╰─", "─╯", meta?.leftBottom, meta?.rightBottom);
+			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
+			const bodyStart = 1;
+			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
+			const result: string[] = [topBorder];
+			const leftWall = this.borderColor("│ ");
+			const rightWall = this.borderColor(" │");
+			for (let i = bodyStart; i < bodyEnd; i++) {
+				const line = lines[i] ?? "";
+				const prefix = i === bodyStart ? theme.fg("accent", "> ") : "  ";
+				const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+				result.push(`${leftWall}${prefix}${line}${pad}${rightWall}`);
+			}
+			result.push(bottomBorder);
+			for (let i = bodyEnd + 1; i < lines.length; i++) {
+				result.push(`  ${lines[i] ?? ""}`);
+			}
+			return result;
+		}
+
+		if (this.tuiStyle === "claude-code" && width >= 20) {
 			const innerWidth = Math.max(1, width - 2);
 			const lines = super.render(innerWidth);
 			if (lines.length < 2) {
@@ -277,24 +377,10 @@ export class CustomEditor extends Editor {
 			const bodyStart = 1;
 			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
 
-			if (this.tuiStyle === "opencode") {
-				const bar = theme.fg("accent", "┃ ");
-				const result: string[] = [];
-				for (let i = bodyStart; i < bodyEnd; i++) {
-					const line = lines[i] ?? "";
-					const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
-					result.push(`${bar}${line}${pad}`);
-				}
-				for (let i = bodyEnd + 1; i < lines.length; i++) {
-					result.push(`  ${lines[i] ?? ""}`);
-				}
-				return result;
-			}
-
 			const topBorder = this.buildLabeledBorder(width, "──", "──", topLeftLabel, meta?.rightTop);
 			const bottomBorder = this.buildLabeledBorder(width, "──", "──", meta?.leftBottom, meta?.rightBottom);
 			const result: string[] = [topBorder];
-			const promptPrefix = theme.fg("accent", rawPrompt);
+			const promptPrefix = theme.fg("accent", "❯ ");
 			for (let i = bodyStart; i < bodyEnd; i++) {
 				const line = lines[i] ?? "";
 				const prefix = i === bodyStart ? promptPrefix : "  ";

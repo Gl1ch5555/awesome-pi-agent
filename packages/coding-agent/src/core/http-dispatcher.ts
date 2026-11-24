@@ -38,6 +38,15 @@ export function scopedFetch(
 		if (isDeliberatelyOverridden) {
 			return globalThis.fetch(input, init);
 		}
+		const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+		const proxyUrl =
+			shouldUseProxyForScope(scope, currentProxySettings) ? normalizeProxyUrl(currentProxySettings?.url) : undefined;
+		if (isBun && proxyUrl && (proxyUrl.startsWith("http://") || proxyUrl.startsWith("https://"))) {
+			return originalGlobalFetch(input, {
+				...init,
+				proxy: proxyUrl,
+			} as RequestInit);
+		}
 		return undici.fetch(input as undici.RequestInfo, {
 			...(init as undici.RequestInit),
 			dispatcher: undici.getGlobalDispatcher(),
@@ -278,21 +287,35 @@ export async function testProxyConnection(
 	targetUrl = "https://api.groq.com/openai/v1/models",
 	timeoutMs = 8_000,
 ): Promise<{ ok: boolean; latencyMs: number; status?: number; error?: string }> {
-	const dispatcher = createProxyDispatcher(proxyUrl, timeoutMs);
-	if (!dispatcher) {
+	const normalized = normalizeProxyUrl(proxyUrl);
+	if (!normalized) {
+		return { ok: false, latencyMs: 0, error: "Invalid proxy URL (use http://, https://, socks5://, or socks5h://)" };
+	}
+	const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+	const useBunNativeProxy = isBun && (normalized.startsWith("http://") || normalized.startsWith("https://"));
+	const dispatcher = useBunNativeProxy ? undefined : createProxyDispatcher(normalized, timeoutMs);
+	if (!useBunNativeProxy && !dispatcher) {
 		return { ok: false, latencyMs: 0, error: "Invalid proxy URL (use http://, https://, socks5://, or socks5h://)" };
 	}
 	const startedAt = Date.now();
 	try {
-		const res = await undici.fetch(targetUrl, {
-			method: "GET",
-			headers: {
-				"User-Agent": "pi-awesome/1.5.2",
-				Accept: "application/json",
-			},
-			dispatcher,
-			signal: AbortSignal.timeout(timeoutMs),
-		});
+		const headers = {
+			"User-Agent": "pi-awesome/1.5.2",
+			Accept: "application/json",
+		};
+		const res = useBunNativeProxy
+			? await originalGlobalFetch(targetUrl, {
+					method: "GET",
+					headers,
+					proxy: normalized,
+					signal: AbortSignal.timeout(timeoutMs),
+				} as RequestInit)
+			: await undici.fetch(targetUrl, {
+					method: "GET",
+					headers,
+					dispatcher,
+					signal: AbortSignal.timeout(timeoutMs),
+				});
 		if (res.status === 403 || res.status === 407) {
 			return {
 				ok: false,
@@ -309,7 +332,7 @@ export async function testProxyConnection(
 			error: error instanceof Error ? error.message : String(error),
 		};
 	} finally {
-		await dispatcher.close().catch(() => {});
+		await dispatcher?.close().catch(() => {});
 	}
 }
 

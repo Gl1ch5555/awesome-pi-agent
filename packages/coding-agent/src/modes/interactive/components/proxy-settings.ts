@@ -82,6 +82,7 @@ export class ProxySettingsSubmenu extends Container implements Focusable {
 	private testing = false;
 	private onChange: (patch: Partial<ProxySettings>) => void;
 	private onDone: () => void;
+	private onRequestRender?: () => void;
 
 	private _focused = false;
 	get focused(): boolean {
@@ -92,7 +93,12 @@ export class ProxySettingsSubmenu extends Container implements Focusable {
 		if (this.input) this.input.focused = value;
 	}
 
-	constructor(initial: ProxySettings, onChange: (patch: Partial<ProxySettings>) => void, onDone: () => void) {
+	constructor(
+		initial: ProxySettings,
+		onChange: (patch: Partial<ProxySettings>) => void,
+		onDone: () => void,
+		onRequestRender?: () => void,
+	) {
 		super();
 		this.state = {
 			enabled: initial.enabled ?? false,
@@ -105,6 +111,7 @@ export class ProxySettingsSubmenu extends Container implements Focusable {
 		this.draft = parseDraftFromUrl(this.state.url);
 		this.onChange = onChange;
 		this.onDone = onDone;
+		this.onRequestRender = onRequestRender;
 		this.rebuild();
 	}
 
@@ -145,6 +152,7 @@ export class ProxySettingsSubmenu extends Container implements Focusable {
 				this.setStatus(`Connection failed: ${res.error ?? "unknown error"}`, true);
 			}
 			this.rebuild();
+			this.onRequestRender?.();
 		});
 	}
 

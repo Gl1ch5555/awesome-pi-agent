@@ -325,19 +325,31 @@ export class FooterComponent implements Component {
 			// CWD, model, and context% are embedded in the editor border; keep footer ultra-compact.
 			const compactStats = statsParts.slice(0, -1).join(" ");
 			lines = compactStats ? [truncateToWidth(theme.fg("dim", compactStats), width, theme.fg("dim", "..."))] : [];
-		} else if (
-			this.tuiStyle === "claude-code" ||
-			this.tuiStyle === "codex-cli" ||
-			this.tuiStyle === "opencode" ||
-			this.tuiStyle === "kiro-cli" ||
-			this.tuiStyle === "gemini-cli"
-		) {
+		} else if (this.tuiStyle === "codex-cli") {
+			const leftPart = theme.fg("dim", "  ? for shortcuts");
+			const rightText = rightSide ? theme.fg("muted", rightSide) : "";
+			const gap = Math.max(1, width - visibleWidth(leftPart) - visibleWidth(rightText));
+			lines = [rightText ? `${leftPart}${" ".repeat(gap)}${rightText}` : leftPart];
+		} else if (this.tuiStyle === "opencode") {
+			const leftPart = truncateToWidth(theme.fg("dim", `  ${pwd}`), Math.max(12, Math.floor(width * 0.55)), "...");
+			const rightText = theme.fg("dim", "tab agents · ctrl+p commands");
+			const gap = Math.max(1, width - visibleWidth(leftPart) - visibleWidth(rightText));
+			lines = [`${leftPart}${" ".repeat(gap)}${rightText}`];
+		} else if (this.tuiStyle === "kiro-cli") {
+			const leftPart = theme.fg("dim", "shift+tab: thinking · ctrl+l: model");
+			const rightText = theme.fg("dim", "ctrl+o: tools");
+			const gap = Math.max(1, width - visibleWidth(leftPart) - visibleWidth(rightText));
+			lines = [width >= 50 ? `${leftPart}${" ".repeat(gap)}${rightText}` : truncateToWidth(leftPart, width, "...")];
+		} else if (this.tuiStyle === "gemini-cli") {
+			const leftPart = truncateToWidth(theme.fg("accent", pwd), Math.max(12, Math.floor(width * 0.45)), "...");
+			const rightText = rightSide ? theme.fg("accent", rightSide) : "";
+			const gap = Math.max(1, width - visibleWidth(leftPart) - visibleWidth(rightText));
+			lines = [rightText ? `${leftPart}${" ".repeat(gap)}${rightText}` : leftPart];
+		} else if (this.tuiStyle === "claude-code") {
 			const branchMatch = pwd.match(/^(.*?)(\s+\([^)]+\))$/);
-			const baseLeft = branchMatch
+			const leftPart = branchMatch
 				? `${theme.fg("muted", branchMatch[1]!)}${theme.fg("accent", branchMatch[2]!)}`
 				: theme.fg("muted", pwd);
-			const leftPart =
-				this.tuiStyle === "kiro-cli" ? `${theme.fg("accent", "Kiro")} ${theme.fg("dim", "·")} ${baseLeft}` : baseLeft;
 			const rightText = rightSide ? `${rightSide}` : "";
 			const leftMax = Math.max(10, width - visibleWidth(rightText) - 2);
 			const leftTrimmed = truncateToWidth(leftPart, leftMax, theme.fg("dim", "..."));

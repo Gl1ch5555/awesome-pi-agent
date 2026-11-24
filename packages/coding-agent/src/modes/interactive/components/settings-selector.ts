@@ -176,6 +176,7 @@ export interface SettingsCallbacks {
 	onTuiStyleChange?: (style: TuiStyle) => void;
 	onThemeAccentChange?: (accent: ThemeAccent) => void;
 	onUiPackChange?: (pack: UiPack) => void;
+	onRequestRender?: () => void;
 	onAutoUpdateChange?: (mode: AutoUpdateMode) => void;
 	onCancel: () => void;
 }
@@ -822,6 +823,7 @@ export class SettingsSelectorComponent extends Container {
 							callbacks.onProxySettingsChange?.(patch);
 						},
 						() => done(formatProxySummary(config.proxy)),
+						callbacks.onRequestRender,
 					),
 			},
 			{

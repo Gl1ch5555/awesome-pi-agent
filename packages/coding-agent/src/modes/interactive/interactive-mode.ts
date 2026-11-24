@@ -1111,35 +1111,44 @@ export class InteractiveMode {
 					].join("\n");
 				}
 				if (style === "codex-cli") {
+					const l1 = `${theme.fg("accent", ">_")} ${theme.bold(theme.fg("text", "OpenAI Codex"))} ${theme.fg("dim", `(v${this.version})`)}`;
+					const l2 = `${theme.fg("dim", "model:")} ${theme.bold(theme.fg("text", `${modelName} ${thinking}`))}  ${theme.fg("accent", "/model to change")}`;
+					const l3 = `${theme.fg("dim", "directory:")} ${theme.bold(theme.fg("text", cwd))}`;
+					const inner = Math.min(72, Math.max(42, modelName.length + thinking.length + 30, cwd.length + 14));
+					const boxLine = (s: string) => {
+						const vis = visibleWidth(s);
+						return `${theme.fg("dim", "│")} ${s}${" ".repeat(Math.max(0, inner - vis))} ${theme.fg("dim", "│")}`;
+					};
 					return [
-						`${theme.fg("accent", ">_")} ${theme.bold(theme.fg("text", "OpenAI Codex"))} ${theme.fg("dim", `(v${this.version})`)}`,
-						theme.fg("dim", cwd),
-						theme.fg("muted", `model: ${modelName} ${thinking}`),
+						theme.fg("dim", `╭${"─".repeat(inner + 2)}╮`),
+						boxLine(l1),
+						boxLine(l2),
+						boxLine(l3),
+						theme.fg("dim", `╰${"─".repeat(inner + 2)}╯`),
 						...(hints ? ["", hints] : []),
 					].join("\n");
 				}
 				if (style === "opencode") {
-					return [
-						`${theme.fg("muted", "open")}${theme.bold(theme.fg("text", "code"))} ${theme.fg("dim", `v${this.version}`)}`,
-						theme.fg("muted", `${modelName} · ${thinking}`),
-						theme.fg("dim", cwd),
-						...(hints ? ["", hints] : []),
-					].join("\n");
+					const r0 = theme.bold(theme.fg("text", "             ▄                         "));
+					const r1 = `${theme.fg("muted", "█▀▀█ █▀▀█ █▀▀█ █▀▀▄")} ${theme.bold(theme.fg("text", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█"))}`;
+					const r2 = `${theme.fg("muted", "█  █ █  █ █▀▀▀ █  █")} ${theme.bold(theme.fg("text", "█    █  █ █  █ █▀▀▀"))}`;
+					const r3 = `${theme.fg("muted", "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀")} ${theme.bold(theme.fg("text", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"))}`;
+					return [r0, r1, r2, r3, theme.fg("dim", `${modelName} · ${thinking} · ${cwd}`), ...(hints ? ["", hints] : [])].join(
+						"\n",
+					);
 				}
 				if (style === "kiro-cli") {
-					return [
-						`${theme.bold(theme.fg("accent", "Kiro"))} ${theme.fg("dim", `v${this.version}`)} ${theme.fg("muted", `· ${modelName} · ${thinking}`)}`,
-						theme.fg("dim", cwd),
-						...(hints ? ["", hints] : []),
-					].join("\n");
+					return hints ? hints : "";
 				}
 				if (style === "gemini-cli") {
-					return [
-						`${theme.fg("accent", "✦")} ${theme.bold(theme.fg("text", "GEMINI"))} ${theme.fg("dim", `v${this.version}`)}`,
-						theme.fg("muted", `${modelName} · ${thinking}`),
-						theme.fg("dim", cwd),
-						...(hints ? ["", hints] : []),
-					].join("\n");
+					const g1 = `\x1b[38;2;88;166;255m ██████╗ ███████╗\x1b[38;2;157;124;216m███╗   ███╗██╗\x1b[38;2;247;118;142m███╗   ██╗██╗\x1b[0m`;
+					const g2 = `\x1b[38;2;88;166;255m██╔════╝ ██╔════╝\x1b[38;2;157;124;216m████╗ ████║██║\x1b[38;2;247;118;142m████╗  ██║██║\x1b[0m`;
+					const g3 = `\x1b[38;2;88;166;255m██║  ███╗█████╗  \x1b[38;2;157;124;216m██╔████╔██║██║\x1b[38;2;247;118;142m██╔██╗ ██║██║\x1b[0m`;
+					const g4 = `\x1b[38;2;88;166;255m██║   ██║██╔══╝  \x1b[38;2;157;124;216m██║╚██╔╝██║██║\x1b[38;2;247;118;142m██║╚██╗██║██║\x1b[0m`;
+					const g5 = `\x1b[38;2;88;166;255m╚██████╔╝███████╗\x1b[38;2;157;124;216m██║ ╚═╝ ██║██║\x1b[38;2;247;118;142m██║ ╚████║██║\x1b[0m`;
+					return [g1, g2, g3, g4, g5, theme.fg("dim", `${modelName} · ${thinking} · ${cwd}`), ...(hints ? ["", hints] : [])].join(
+						"\n",
+					);
 				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 				const [top, bottom] = piLogoLines();
@@ -5765,6 +5774,9 @@ export class InteractiveMode {
 					onAutoUpdateChange: (mode) => {
 						this.settingsManager.setAutoUpdate(mode);
 						this.triggerAutoSyncPush();
+					},
+					onRequestRender: () => {
+						this.ui.requestRender();
 					},
 					onCancel: () => {
 						done();
