@@ -3224,12 +3224,20 @@ export class AgentSession {
 		const directContextTokensForLength = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
 		const recoverableLength =
 			sameModel && assistantIsProjected && isRecoverableLength(assistantMessage, messageModel.maxTokens);
+		const hasPartialOutput =
+			assistantMessage.usage.output > 0 ||
+			assistantMessage.content.some(
+				(c) =>
+					(c.type === "text" && c.text.length > 0) ||
+					(c.type === "thinking" && c.thinking.length > 0) ||
+					c.type === "toolCall",
+			);
 		const isLowContextLengthStop =
 			sameModel &&
 			assistantMessage.stopReason === "length" &&
 			!explicitOverflow &&
 			contextWindow > 0 &&
-			assistantMessage.usage.output > 0 &&
+			hasPartialOutput &&
 			((contextWindow >= 32_768 && directContextTokensForLength < contextWindow * 0.5) || !recoverableLength);
 		if (isLowContextLengthStop) {
 			if (!this._agentRunAbortRequested && this._lengthContinueCount < 3 && !this.agent.hasQueuedMessages()) {

@@ -114,6 +114,7 @@ export const codemodeToolSystemPromptContribution = {
 	snippet: "Run JavaScript that calls other tools",
 	guidelines: [
 		"Use codemode to batch independent tool calls (Promise.allSettled), chain them, or filter large output, instead of many separate calls.",
+		"Keep each codemode script concise and modular (prefer ~80-120 lines max per call; split multi-file writes across multiple codemode calls) so generation streams quickly and never truncates.",
 	],
 } as const;
 
