@@ -299,7 +299,7 @@ export class CustomEditor extends Editor {
 			}
 			const badgeLeft = `${theme.fg("accent", "Build")} ${theme.fg("dim", "·")} ${meta?.rightTop ?? ""}`;
 			result.push(panelLine(`  ${badgeLeft}`, 2 + visibleWidth(badgeLeft)));
-			result.push(`${theme.fg("accent", "╹")}${theme.fg("borderMuted", "▀".repeat(width - 1))}`);
+			result.push(panelLine("", 0));
 			for (let i = bodyEnd + 1; i < lines.length; i++) {
 				result.push(`  ${lines[i] ?? ""}`);
 			}
@@ -335,13 +335,12 @@ export class CustomEditor extends Editor {
 			const innerWidth = Math.max(1, width - 6);
 			const lines = super.render(innerWidth);
 			if (lines.length < 2) return lines;
-			const meta = this.borderMetaProvider?.();
 			let topLeftLabel: string | undefined;
 			if (this.embedWorkingStatus && this.workingStatusIndicator) {
 				topLeftLabel = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 8));
 			}
-			const topBorder = this.buildLabeledBorder(width, "╭─", "─╮", topLeftLabel, meta?.rightTop);
-			const bottomBorder = this.buildLabeledBorder(width, "╰─", "─╯", meta?.leftBottom, meta?.rightBottom);
+			const topBorder = this.buildLabeledBorder(width, "╭─", "─╮", topLeftLabel, undefined);
+			const bottomBorder = this.buildLabeledBorder(width, "╰─", "─╯", undefined, undefined);
 			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
 			const bodyStart = 1;
 			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;

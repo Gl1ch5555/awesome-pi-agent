@@ -53,9 +53,9 @@ export class UserMessageComponent extends Container {
 		const prefixMap: Partial<Record<TuiStyle, string>> = {
 			"claude-code": "❯ ",
 			"codex-cli": "› ",
-			"gemini-cli": "> ",
+			"gemini-cli": "\u200B> ",
 			opencode: "┃ ",
-			"kiro-cli": "▎ ",
+			"kiro-cli": "┃ ",
 		};
 		const prefix = prefixMap[this.tuiStyle] ?? "";
 		const displayText = prefix ? `${prefix}${this.text}` : this.text;

@@ -164,7 +164,6 @@ export class AssistantMessageComponent extends Container {
 					"claude-code": "● ",
 					"codex-cli": "• ",
 					"gemini-cli": "✦ ",
-					"kiro-cli": "▎ ",
 				};
 				const bullet = isFirstTextBlock ? (bulletMap[this.tuiStyle] ?? "") : "";
 				const text = bullet ? `${bullet}${rawText}` : rawText;

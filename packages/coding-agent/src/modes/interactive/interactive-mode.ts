@@ -1114,7 +1114,7 @@ export class InteractiveMode {
 					const l1 = `${theme.fg("accent", ">_")} ${theme.bold(theme.fg("text", "OpenAI Codex"))} ${theme.fg("dim", `(v${this.version})`)}`;
 					const l2 = `${theme.fg("dim", "model:")} ${theme.bold(theme.fg("text", `${modelName} ${thinking}`))}  ${theme.fg("accent", "/model to change")}`;
 					const l3 = `${theme.fg("dim", "directory:")} ${theme.bold(theme.fg("text", cwd))}`;
-					const inner = Math.min(72, Math.max(42, modelName.length + thinking.length + 30, cwd.length + 14));
+					const inner = Math.min(76, Math.max(44, visibleWidth(l1), visibleWidth(l2), visibleWidth(l3)));
 					const boxLine = (s: string) => {
 						const vis = visibleWidth(s);
 						return `${theme.fg("dim", "│")} ${s}${" ".repeat(Math.max(0, inner - vis))} ${theme.fg("dim", "│")}`;
