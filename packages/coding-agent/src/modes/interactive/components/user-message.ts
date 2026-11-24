@@ -1,5 +1,6 @@
 import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+import type { TuiStyle } from "../../../core/settings-schema.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
@@ -17,6 +18,7 @@ export class UserMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private messageId?: string;
 	private timestamp?: string;
+	private tuiStyle: TuiStyle = "native";
 
 	constructor(
 		text: string,
@@ -41,13 +43,27 @@ export class UserMessageComponent extends Container {
 		this.rebuild();
 	}
 
+	setTuiStyle(style: TuiStyle): void {
+		this.tuiStyle = style;
+		this.rebuild();
+	}
+
 	private rebuild(): void {
 		this.clear();
+		const prefixMap: Partial<Record<TuiStyle, string>> = {
+			"claude-code": "❯ ",
+			"codex-cli": "› ",
+			"gemini-cli": "> ",
+			opencode: "┃ ",
+			"kiro-cli": "▎ ",
+		};
+		const prefix = prefixMap[this.tuiStyle] ?? "";
+		const displayText = prefix ? `${prefix}${this.text}` : this.text;
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
 		this.addChild(
 			new Markdown(
-				this.text,
+				displayText,
 				this.outputPad,
 				1,
 				this.markdownTheme,

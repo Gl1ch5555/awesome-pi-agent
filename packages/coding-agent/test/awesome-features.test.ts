@@ -56,6 +56,14 @@ describe("awesome-pi-agent customizations", () => {
 		expect(theme.appearance).toBe("dark");
 	});
 
+	it("registers codex-cli, opencode, kiro-cli, and gemini-cli built-in themes", () => {
+		for (const name of ["codex-cli", "opencode", "kiro-cli", "gemini-cli"]) {
+			initTheme(name);
+			expect(theme.name).toBe(name);
+			expect(theme.appearance).toBe("dark");
+		}
+	});
+
 	it("binds app.clipboard.pasteImage strictly to ctrl+v on all platforms", () => {
 		const kb = new KeybindingsManager();
 		expect(kb.getKeys("app.clipboard.pasteImage")).toEqual(["ctrl+v"]);

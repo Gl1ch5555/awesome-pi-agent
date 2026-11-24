@@ -980,9 +980,25 @@
         {
           "type": "string",
           "const": "claude-code"
+        },
+        {
+          "type": "string",
+          "const": "codex-cli"
+        },
+        {
+          "type": "string",
+          "const": "opencode"
+        },
+        {
+          "type": "string",
+          "const": "kiro-cli"
+        },
+        {
+          "type": "string",
+          "const": "gemini-cli"
         }
       ],
-      "description": "Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, or claude-code."
+      "description": "Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, claude-code, codex-cli, opencode, kiro-cli, or gemini-cli."
     },
     "themeAccent": {
       "anyOf": [

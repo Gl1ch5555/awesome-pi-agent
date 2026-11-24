@@ -287,14 +287,18 @@ export class ToolExecutionComponent extends Container {
 
 	private updateDisplay(): void {
 		this.argsPending = false;
-		const bgFn =
-			this.tuiStyle === "claude-code"
-				? (text: string) => text
-				: this.isPartial
-					? (text: string) => theme.bg("toolPendingBg", text)
-					: this.result?.isError
-						? (text: string) => theme.bg("toolErrorBg", text)
-						: (text: string) => theme.bg("toolSuccessBg", text);
+		const isTransparentStyle =
+			this.tuiStyle === "claude-code" ||
+			this.tuiStyle === "codex-cli" ||
+			this.tuiStyle === "kiro-cli" ||
+			this.tuiStyle === "opencode";
+		const bgFn = isTransparentStyle
+			? (text: string) => text
+			: this.isPartial
+				? (text: string) => theme.bg("toolPendingBg", text)
+				: this.result?.isError
+					? (text: string) => theme.bg("toolErrorBg", text)
+					: (text: string) => theme.bg("toolSuccessBg", text);
 
 		let hasContent = false;
 		this.hideComponent = false;

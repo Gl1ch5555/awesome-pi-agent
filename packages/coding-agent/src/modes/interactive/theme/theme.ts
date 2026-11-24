@@ -425,6 +425,10 @@ function getBuiltinThemes(): Record<string, ThemeJson> {
 		const names = [
 			"graphite",
 			"claude-code",
+			"codex-cli",
+			"opencode",
+			"kiro-cli",
+			"gemini-cli",
 			"dark",
 			"light",
 			"catppuccin-mocha",

@@ -178,8 +178,18 @@ export class CustomEditor extends Editor {
 		return `${this.borderColor(leftCorner)}${effLeft}${this.borderColor(fill)}${effRight}${this.borderColor(rightCorner)}`;
 	}
 
+	private isHorizontalRuleStyle(): boolean {
+		return (
+			this.tuiStyle === "compact" ||
+			this.tuiStyle === "claude-code" ||
+			this.tuiStyle === "codex-cli" ||
+			this.tuiStyle === "kiro-cli" ||
+			this.tuiStyle === "gemini-cli"
+		);
+	}
+
 	protected override renderTopBorder(width: number, hiddenLineCount: number): string {
-		if ((this.tuiStyle === "compact" || this.tuiStyle === "claude-code") && width >= 20 && !this.workingStatusIndicator) {
+		if (this.isHorizontalRuleStyle() && width >= 20 && !this.workingStatusIndicator) {
 			const meta = this.borderMetaProvider?.();
 			const left = hiddenLineCount > 0 ? this.borderColor(`↑ ${hiddenLineCount} more`) : undefined;
 			return this.buildLabeledBorder(width, "──", "──", left, meta?.rightTop);
@@ -230,7 +240,7 @@ export class CustomEditor extends Editor {
 
 	protected override renderBottomBorder(width: number, hiddenLineCount: number): string {
 		let border: string;
-		if ((this.tuiStyle === "compact" || this.tuiStyle === "claude-code") && width >= 20) {
+		if (this.isHorizontalRuleStyle() && width >= 20) {
 			const meta = this.borderMetaProvider?.();
 			const right =
 				hiddenLineCount > 0 ? this.borderColor(`↓ ${hiddenLineCount} more`) : meta?.rightBottom;
@@ -243,7 +253,15 @@ export class CustomEditor extends Editor {
 	}
 
 	override render(width: number): string[] {
-		if (this.tuiStyle === "claude-code" && width >= 20) {
+		const promptByStyle: Partial<Record<TuiStyle, string>> = {
+			"claude-code": "❯ ",
+			"codex-cli": "› ",
+			"kiro-cli": "  ",
+			"gemini-cli": "> ",
+			opencode: "┃ ",
+		};
+		const rawPrompt = promptByStyle[this.tuiStyle];
+		if (rawPrompt !== undefined && width >= 20) {
 			const innerWidth = Math.max(1, width - 2);
 			const lines = super.render(innerWidth);
 			if (lines.length < 2) {
@@ -254,15 +272,29 @@ export class CustomEditor extends Editor {
 			if (this.embedWorkingStatus && this.workingStatusIndicator) {
 				topLeftLabel = this.workingStatusIndicator.renderInBorder(Math.max(1, width - 6));
 			}
-			const topBorder = this.buildLabeledBorder(width, "──", "──", topLeftLabel, meta?.rightTop);
-			const bottomBorder = this.buildLabeledBorder(width, "──", "──", meta?.leftBottom, meta?.rightBottom);
 
 			const foundBottom = this.lastRenderedBottomBorder ? lines.indexOf(this.lastRenderedBottomBorder, 1) : -1;
 			const bodyStart = 1;
 			const bodyEnd = foundBottom !== -1 ? foundBottom : lines.length - 1;
 
+			if (this.tuiStyle === "opencode") {
+				const bar = theme.fg("accent", "┃ ");
+				const result: string[] = [];
+				for (let i = bodyStart; i < bodyEnd; i++) {
+					const line = lines[i] ?? "";
+					const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
+					result.push(`${bar}${line}${pad}`);
+				}
+				for (let i = bodyEnd + 1; i < lines.length; i++) {
+					result.push(`  ${lines[i] ?? ""}`);
+				}
+				return result;
+			}
+
+			const topBorder = this.buildLabeledBorder(width, "──", "──", topLeftLabel, meta?.rightTop);
+			const bottomBorder = this.buildLabeledBorder(width, "──", "──", meta?.leftBottom, meta?.rightBottom);
 			const result: string[] = [topBorder];
-			const promptPrefix = theme.fg("accent", "❯ ");
+			const promptPrefix = theme.fg("accent", rawPrompt);
 			for (let i = bodyStart; i < bodyEnd; i++) {
 				const line = lines[i] ?? "";
 				const prefix = i === bodyStart ? promptPrefix : "  ";

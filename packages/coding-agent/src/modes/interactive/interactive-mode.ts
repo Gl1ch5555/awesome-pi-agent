@@ -1088,20 +1088,57 @@ export class InteractiveMode {
 			// its second line the first line of key hints. Terminals that cannot render the logo get a
 			// "Pi vX" line instead, with the key hints below it.
 			const showLogo = supportsPiLogo();
+			const isAgentPackStyle = (style: string) =>
+				style === "claude-code" ||
+				style === "codex-cli" ||
+				style === "opencode" ||
+				style === "kiro-cli" ||
+				style === "gemini-cli";
 			const withLogo = (hints: string) => {
-				if (this.settingsManager.getTuiStyle() === "claude-code") {
+				const style = this.settingsManager.getTuiStyle();
+				const modelName = this.session.model?.id ?? "default";
+				const thinking = this.session.thinkingLevel || "off";
+				const cwd = this.sessionManager.getCwd();
+				if (style === "claude-code") {
 					const clawd1 = theme.fg("accent", " ▐▛███▜▌ ");
 					const clawd2 = theme.fg("accent", "▝▜█████▛▘");
 					const clawd3 = theme.fg("accent", "  ▘▘ ▝▝  ");
-					const modelName = this.session.model?.id ?? "default";
-					const thinking = this.session.thinkingLevel || "off";
-					const cwd = this.sessionManager.getCwd();
 					return [
 						`${clawd1}  ${theme.bold(theme.fg("text", "Claude Code"))} ${theme.fg("dim", `v${this.version}`)}`,
 						`${clawd2}  ${theme.fg("muted", `${modelName} · ${thinking}`)}`,
 						`${clawd3}  ${theme.fg("dim", cwd)}`,
-						"",
-						hints,
+						...(hints ? ["", hints] : []),
+					].join("\n");
+				}
+				if (style === "codex-cli") {
+					return [
+						`${theme.fg("accent", ">_")} ${theme.bold(theme.fg("text", "OpenAI Codex"))} ${theme.fg("dim", `(v${this.version})`)}`,
+						theme.fg("dim", cwd),
+						theme.fg("muted", `model: ${modelName} ${thinking}`),
+						...(hints ? ["", hints] : []),
+					].join("\n");
+				}
+				if (style === "opencode") {
+					return [
+						`${theme.fg("muted", "open")}${theme.bold(theme.fg("text", "code"))} ${theme.fg("dim", `v${this.version}`)}`,
+						theme.fg("muted", `${modelName} · ${thinking}`),
+						theme.fg("dim", cwd),
+						...(hints ? ["", hints] : []),
+					].join("\n");
+				}
+				if (style === "kiro-cli") {
+					return [
+						`${theme.bold(theme.fg("accent", "Kiro"))} ${theme.fg("dim", `v${this.version}`)} ${theme.fg("muted", `· ${modelName} · ${thinking}`)}`,
+						theme.fg("dim", cwd),
+						...(hints ? ["", hints] : []),
+					].join("\n");
+				}
+				if (style === "gemini-cli") {
+					return [
+						`${theme.fg("accent", "✦")} ${theme.bold(theme.fg("text", "GEMINI"))} ${theme.fg("dim", `v${this.version}`)}`,
+						theme.fg("muted", `${modelName} · ${thinking}`),
+						theme.fg("dim", cwd),
+						...(hints ? ["", hints] : []),
 					].join("\n");
 				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
@@ -1154,7 +1191,10 @@ export class InteractiveMode {
 			const onboarding = () =>
 				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
 			const header = new BuiltInHeader(
-				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
+				() =>
+					isAgentPackStyle(this.settingsManager.getTuiStyle())
+						? withLogo("")
+						: `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
 				this.getStartupExpansionState(),
 				1,
@@ -1654,7 +1694,18 @@ export class InteractiveMode {
 	}
 
 	private shouldShowStartupDetails(): boolean {
-		return this.options.verbose === true || this.settingsManager.getQuietStartup() === false;
+		if (this.options.verbose === true) return true;
+		const style = this.settingsManager.getTuiStyle();
+		if (
+			style === "claude-code" ||
+			style === "codex-cli" ||
+			style === "opencode" ||
+			style === "kiro-cli" ||
+			style === "gemini-cli"
+		) {
+			return false;
+		}
+		return this.settingsManager.getQuietStartup() === false;
 	}
 
 	/**
@@ -4352,6 +4403,7 @@ export class InteractiveMode {
 								options?.messageId,
 								options?.timestamp,
 							);
+							userComponent.setTuiStyle(this.settingsManager.getTuiStyle());
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {
@@ -4363,6 +4415,7 @@ export class InteractiveMode {
 							options?.messageId,
 							options?.timestamp,
 						);
+						userComponent.setTuiStyle(this.settingsManager.getTuiStyle());
 						this.chatContainer.addChild(userComponent);
 					}
 					if (options?.populateHistory) {
@@ -5664,7 +5717,11 @@ export class InteractiveMode {
 						this.defaultEditor.setTuiStyle(style);
 						this.footer.setTuiStyle(style);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+							if (
+								child instanceof AssistantMessageComponent ||
+								child instanceof ToolExecutionComponent ||
+								child instanceof UserMessageComponent
+							) {
 								child.setTuiStyle(style);
 							}
 						}
@@ -5691,7 +5748,11 @@ export class InteractiveMode {
 						this.defaultEditor.setTuiStyle(pack.tuiStyle);
 						this.footer.setTuiStyle(pack.tuiStyle);
 						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+							if (
+								child instanceof AssistantMessageComponent ||
+								child instanceof ToolExecutionComponent ||
+								child instanceof UserMessageComponent
+							) {
 								child.setTuiStyle(pack.tuiStyle);
 							}
 						}

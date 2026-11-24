@@ -232,9 +232,14 @@ const TuiStyleSchema = Type.Union(
 		Type.Literal("opentui"),
 		Type.Literal("sageveil"),
 		Type.Literal("claude-code"),
+		Type.Literal("codex-cli"),
+		Type.Literal("opencode"),
+		Type.Literal("kiro-cli"),
+		Type.Literal("gemini-cli"),
 	],
 	{
-		description: "Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, or claude-code.",
+		description:
+			"Interactive TUI layout preset: native, rounded, compact, opentui, sageveil, claude-code, codex-cli, opencode, kiro-cli, or gemini-cli.",
 	},
 );
 

@@ -1,6 +1,15 @@
 import type { ThemeAccent, TuiStyle } from "../../../core/settings-schema.ts";
 
-export type UiPackId = "pi-graphite" | "claude-code" | "sageveil" | "tokyo-opentui" | "catppuccin-rounded";
+export type UiPackId =
+	| "pi-graphite"
+	| "claude-code"
+	| "codex-cli"
+	| "opencode"
+	| "kiro-cli"
+	| "gemini-cli"
+	| "sageveil"
+	| "tokyo-opentui"
+	| "catppuccin-rounded";
 
 export interface UiPack {
 	id: UiPackId;
@@ -23,10 +32,42 @@ export const UI_PACKS: readonly UiPack[] = [
 	{
 		id: "claude-code",
 		label: "claude-code",
-		description: "Claude Code look: terracotta #d77757, > prompt, ∴ Thinking, compact tools",
+		description: "Claude Code look: terracotta #d77757, Clawd mascot, ❯ prompt, ∴ Thinking",
 		theme: "claude-code",
 		themeAccent: "default",
 		tuiStyle: "claude-code",
+	},
+	{
+		id: "codex-cli",
+		label: "codex-cli",
+		description: "OpenAI Codex CLI look: #63A8F8 blue, >_ header, › prompt, • bullet",
+		theme: "codex-cli",
+		themeAccent: "default",
+		tuiStyle: "codex-cli",
+	},
+	{
+		id: "opencode",
+		label: "opencode",
+		description: "OpenCode look: #fab283 peach, open/code ASCII, ┃ split-border prompt",
+		theme: "opencode",
+		themeAccent: "default",
+		tuiStyle: "opencode",
+	},
+	{
+		id: "kiro-cli",
+		label: "kiro-cli",
+		description: "Kiro CLI look: #b080ff violet, ▎ left-bar messages, compact Kiro footer",
+		theme: "kiro-cli",
+		themeAccent: "default",
+		tuiStyle: "kiro-cli",
+	},
+	{
+		id: "gemini-cli",
+		label: "gemini-cli",
+		description: "Google Gemini CLI look: #87AFFF/#D7AFFF palette, ✦ GEMINI, > prompt",
+		theme: "gemini-cli",
+		themeAccent: "default",
+		tuiStyle: "gemini-cli",
 	},
 	{
 		id: "sageveil",

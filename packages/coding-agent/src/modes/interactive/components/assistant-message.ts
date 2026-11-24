@@ -160,7 +160,14 @@ export class AssistantMessageComponent extends Container {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				const rawText = content.text.trim();
-				const text = this.tuiStyle === "claude-code" && isFirstTextBlock ? `● ${rawText}` : rawText;
+				const bulletMap: Partial<Record<TuiStyle, string>> = {
+					"claude-code": "● ",
+					"codex-cli": "• ",
+					"gemini-cli": "✦ ",
+					"kiro-cli": "▎ ",
+				};
+				const bullet = isFirstTextBlock ? (bulletMap[this.tuiStyle] ?? "") : "";
+				const text = bullet ? `${bullet}${rawText}` : rawText;
 				isFirstTextBlock = false;
 				addVisibleChild(
 					markdownBlock(
