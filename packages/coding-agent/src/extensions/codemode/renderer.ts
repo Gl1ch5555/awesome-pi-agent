@@ -76,7 +76,11 @@ export const codemodeRenderers: Pick<
 		startToolTimer(context);
 		// The code includes the `// @options:` line, so options show as part of the script.
 		const code = str((args as { code?: unknown } | undefined)?.code);
-		const title = theme.fg("toolTitle", theme.bold("codemode"));
+		const isStreamingArgs = context.argsComplete === false;
+		const lineCount = code ? code.split("\n").length : 0;
+		const title = isStreamingArgs
+			? `${theme.fg("toolTitle", theme.bold("codemode"))} ${theme.fg("dim", `(streaming… ${lineCount} lines)`)}`
+			: theme.fg("toolTitle", theme.bold("codemode"));
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		if (code === null) {
@@ -96,7 +100,7 @@ export const codemodeRenderers: Pick<
 					: new VisualLinePreview({
 							text: highlighted,
 							maxVisualLines: CODE_PREVIEW_LINES,
-							keep: "start",
+							keep: isStreamingArgs ? "end" : "start",
 							formatHint: (hidden) => expandHint(theme, hidden, "lines"),
 						}),
 			);

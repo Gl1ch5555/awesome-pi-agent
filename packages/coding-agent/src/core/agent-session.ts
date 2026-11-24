@@ -440,6 +440,7 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _lengthContinueCount = 0;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -1216,6 +1217,9 @@ export class AgentSession {
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
 			const messageText = contentText(event.message.content, "");
+			if (messageText !== "Continue from where you stopped without repeating what you already wrote.") {
+				this._lengthContinueCount = 0;
+			}
 			// Check steering queue first
 			const steeringIndex = this._steeringMessages.indexOf(messageText);
 			if (steeringIndex !== -1) {
@@ -3217,8 +3221,32 @@ export class AgentSession {
 			sameModel &&
 			((explicitOverflow && assistantRetainedForExplicitRecovery) ||
 				(assistantUsageMatchesProjection && isContextOverflow(assistantMessage, contextWindow)));
+		const directContextTokensForLength = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
 		const recoverableLength =
 			sameModel && assistantIsProjected && isRecoverableLength(assistantMessage, messageModel.maxTokens);
+		const isLowContextLengthStop =
+			sameModel &&
+			assistantMessage.stopReason === "length" &&
+			!explicitOverflow &&
+			contextWindow > 0 &&
+			assistantMessage.usage.output > 0 &&
+			((contextWindow >= 32_768 && directContextTokensForLength < contextWindow * 0.5) || !recoverableLength);
+		if (isLowContextLengthStop) {
+			if (!this._agentRunAbortRequested && this._lengthContinueCount < 3 && !this.agent.hasQueuedMessages()) {
+				this._lengthContinueCount++;
+				this.agent.followUp({
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "Continue from where you stopped without repeating what you already wrote.",
+						},
+					],
+					timestamp: Date.now(),
+				});
+			}
+			return false;
+		}
 		if (contextOverflow || recoverableLength) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
