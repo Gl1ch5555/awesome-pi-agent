@@ -153,12 +153,15 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
+		let isFirstTextBlock = true;
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				const text = content.text.trim();
+				const rawText = content.text.trim();
+				const text = this.tuiStyle === "claude-code" && isFirstTextBlock ? `● ${rawText}` : rawText;
+				isFirstTextBlock = false;
 				addVisibleChild(
 					markdownBlock(
 						"text",

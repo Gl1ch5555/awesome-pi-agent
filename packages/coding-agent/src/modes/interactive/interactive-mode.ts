@@ -1089,6 +1089,21 @@ export class InteractiveMode {
 			// "Pi vX" line instead, with the key hints below it.
 			const showLogo = supportsPiLogo();
 			const withLogo = (hints: string) => {
+				if (this.settingsManager.getTuiStyle() === "claude-code") {
+					const clawd1 = theme.fg("accent", " ▐▛███▜▌ ");
+					const clawd2 = theme.fg("accent", "▝▜█████▛▘");
+					const clawd3 = theme.fg("accent", "  ▘▘ ▝▝  ");
+					const modelName = this.session.model?.id ?? "default";
+					const thinking = this.session.thinkingLevel || "off";
+					const cwd = this.sessionManager.getCwd();
+					return [
+						`${clawd1}  ${theme.bold(theme.fg("text", "Claude Code"))} ${theme.fg("dim", `v${this.version}`)}`,
+						`${clawd2}  ${theme.fg("muted", `${modelName} · ${thinking}`)}`,
+						`${clawd3}  ${theme.fg("dim", cwd)}`,
+						"",
+						hints,
+					].join("\n");
+				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 				const [top, bottom] = piLogoLines();
 				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
@@ -2570,15 +2585,21 @@ export class InteractiveMode {
 	}
 
 	private showWorkingStatusIndicator(): void {
-		const colorFn = isEmbeddedStatus(this.editor)
-			? (text: string) =>
-					(this.editor.borderColor ?? theme.getThinkingBorderColor(this.session.thinkingLevel || "off"))(text)
-			: undefined;
+		const isClaudeCode = this.settingsManager.getTuiStyle() === "claude-code";
+		const colorFn = isClaudeCode
+			? (text: string) => theme.fg("accent", text)
+			: isEmbeddedStatus(this.editor)
+				? (text: string) =>
+						(this.editor.borderColor ?? theme.getThinkingBorderColor(this.session.thinkingLevel || "off"))(text)
+				: undefined;
+		const indicatorOptions = isClaudeCode
+			? { frames: ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"], intervalMs: 110 }
+			: this.workingIndicatorOptions;
 		this.showStatusIndicator(
 			new WorkingStatusIndicator(
 				this.ui,
 				this.workingMessage ?? this.defaultWorkingMessage,
-				this.workingIndicatorOptions,
+				indicatorOptions,
 				colorFn,
 			),
 		);
