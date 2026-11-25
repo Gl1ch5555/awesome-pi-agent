@@ -72,6 +72,19 @@ export {
 	truncateTail,
 } from "./truncate.ts";
 export {
+	createAskQuestionsToolDefinition,
+	formatCompactAnswers,
+	MAX_ASK_QUESTIONS,
+	normalizeAskQuestionsRequest,
+	type AskQuestionAnswer,
+	type AskQuestionItem,
+	type AskQuestionsHandler,
+	type AskQuestionsRequest,
+	type AskQuestionsResponse,
+	type AskQuestionsToolDetails,
+	type AskQuestionsToolOptions,
+} from "./ask-questions.ts";
+export {
 	createMemoryToolDefinition,
 	type MemoryToolDetails,
 	type MemoryToolOptions,
@@ -111,6 +124,7 @@ import { createEditTool, createEditToolDefinition, type EditToolOptions } from "
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
+import { createAskQuestionsToolDefinition, type AskQuestionsToolOptions } from "./ask-questions.ts";
 import { createMemoryToolDefinition, type MemoryToolOptions } from "./memory.ts";
 import { createSkillManageToolDefinition, type SkillManageToolOptions } from "./skill-manage.ts";
 import { createPowerShellTool, createPowerShellToolDefinition, type PowerShellToolOptions } from "./powershell.ts";
@@ -134,7 +148,8 @@ export type ToolName =
 	| "memory"
 	| "skill_manage"
 	| "web_search"
-	| "web_fetch";
+	| "web_fetch"
+	| "ask_questions";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
@@ -148,6 +163,7 @@ export const allToolNames: Set<ToolName> = new Set([
 	"skill_manage",
 	"web_search",
 	"web_fetch",
+	"ask_questions",
 ]);
 
 export interface ToolsOptions {
@@ -163,6 +179,7 @@ export interface ToolsOptions {
 	skillManage?: SkillManageToolOptions;
 	webSearch?: WebSearchToolOptions;
 	webFetch?: WebFetchToolOptions;
+	askQuestions?: AskQuestionsToolOptions;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -191,6 +208,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWebSearchToolDefinition(options?.webSearch);
 		case "web_fetch":
 			return createWebFetchToolDefinition(options?.webFetch);
+		case "ask_questions":
+			return createAskQuestionsToolDefinition(options?.askQuestions);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -222,6 +241,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return wrapToolDefinition(createWebSearchToolDefinition(options?.webSearch));
 		case "web_fetch":
 			return wrapToolDefinition(createWebFetchToolDefinition(options?.webFetch));
+		case "ask_questions":
+			return wrapToolDefinition(createAskQuestionsToolDefinition(options?.askQuestions));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -259,6 +280,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		skill_manage: createSkillManageToolDefinition(options?.skillManage),
 		web_search: createWebSearchToolDefinition(options?.webSearch),
 		web_fetch: createWebFetchToolDefinition(options?.webFetch),
+		ask_questions: createAskQuestionsToolDefinition(options?.askQuestions),
 	};
 }
 
@@ -294,5 +316,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		skill_manage: wrapToolDefinition(createSkillManageToolDefinition(options?.skillManage)),
 		web_search: wrapToolDefinition(createWebSearchToolDefinition(options?.webSearch)),
 		web_fetch: wrapToolDefinition(createWebFetchToolDefinition(options?.webFetch)),
+		ask_questions: wrapToolDefinition(createAskQuestionsToolDefinition(options?.askQuestions)),
 	};
 }

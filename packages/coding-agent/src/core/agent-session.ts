@@ -150,7 +150,12 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
-import { createAllToolDefinitions } from "./tools/index.ts";
+import {
+	type AskQuestionsHandler,
+	type AskQuestionsRequest,
+	type AskQuestionsResponse,
+	createAllToolDefinitions,
+} from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
@@ -498,6 +503,8 @@ export class AgentSession {
 	private _sessionStartEvent: SessionStartEvent;
 	private _extensionUIContext?: ExtensionUIContext;
 	private _extensionMode: ExtensionMode = "print";
+	private _tuiQuestionHandler?: AskQuestionsHandler;
+	private _webQuestionHandler?: { hasClients: () => boolean; requestQuestions: AskQuestionsHandler };
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
 	private _extensionShutdownHandler?: ShutdownHandler;
@@ -3875,6 +3882,7 @@ export class AgentSession {
 					},
 					webSearch: { getSettings: () => this.settingsManager.getSearchSettings() },
 					webFetch: { getSettings: () => this.settingsManager.getSearchSettings() },
+					askQuestions: { requestQuestions: (req, signal) => this._requestQuestions(req, signal) },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -3903,12 +3911,70 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "memory"];
+			: ["read", "bash", "edit", "write", "memory", "ask_questions"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
 			includeAllExtensionTools: options.includeAllExtensionTools,
 		});
+	}
+
+	setTuiQuestionHandler(handler: AskQuestionsHandler | undefined): void {
+		this._tuiQuestionHandler = handler;
+	}
+
+	setWebQuestionHandler(
+		handler: { hasClients: () => boolean; requestQuestions: AskQuestionsHandler } | undefined,
+	): void {
+		this._webQuestionHandler = handler;
+	}
+
+	private async _requestQuestions(
+		request: AskQuestionsRequest,
+		signal?: AbortSignal,
+	): Promise<AskQuestionsResponse> {
+		if (signal?.aborted) {
+			return { answers: [], cancelled: true };
+		}
+		const tuiHandler = this._extensionMode === "tui" ? this._tuiQuestionHandler : undefined;
+		const webHandler = this._webQuestionHandler;
+		const useWeb = Boolean(webHandler && (webHandler.hasClients() || !tuiHandler));
+
+		if (!tuiHandler && !useWeb) {
+			return {
+				answers: [],
+				cancelled: true,
+				error: "Interactive quiz UI is unavailable in this mode; ask concise questions in plain text.",
+			};
+		}
+
+		if (tuiHandler && useWeb && webHandler) {
+			const tuiCtrl = new AbortController();
+			const webCtrl = new AbortController();
+			const onAbort = () => {
+				tuiCtrl.abort();
+				webCtrl.abort();
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+			try {
+				const tuiPromise = tuiHandler(request, tuiCtrl.signal).then((res) => ({ winner: "tui" as const, res }));
+				const webPromise = webHandler.requestQuestions(request, webCtrl.signal).then((res) => ({ winner: "web" as const, res }));
+				const first = await Promise.race([tuiPromise, webPromise]);
+				if (first.winner === "tui") {
+					webCtrl.abort();
+				} else {
+					tuiCtrl.abort();
+				}
+				return first.res;
+			} finally {
+				signal?.removeEventListener("abort", onAbort);
+			}
+		}
+
+		if (tuiHandler) {
+			return await tuiHandler(request, signal);
+		}
+		return await webHandler!.requestQuestions(request, signal);
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {

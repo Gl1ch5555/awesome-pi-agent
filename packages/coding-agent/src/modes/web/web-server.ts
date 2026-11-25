@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
+import type { AskQuestionAnswer, AskQuestionsRequest, AskQuestionsResponse } from "../../core/tools/ask-questions.ts";
 import {
 	DEFAULT_CLOUD_SYNC_URL,
 	readSyncState,
@@ -60,6 +62,14 @@ export class PiWebServer {
 	private actualPort: number | undefined;
 	private sseClients = new Set<ServerResponse>();
 	private unsubscribeSession: (() => void) | undefined;
+	private boundQuestionSession: AgentSession | undefined;
+	private pendingQuestion:
+		| {
+				id: string;
+				request: AskQuestionsRequest;
+				finish: (response: AskQuestionsResponse) => void;
+		  }
+		| undefined;
 
 	constructor(sessionSource: AgentSession | (() => AgentSession), options: PiWebServerOptions = {}) {
 		this.sessionSource = sessionSource;
@@ -137,6 +147,14 @@ export class PiWebServer {
 			this.unsubscribeSession();
 			this.unsubscribeSession = undefined;
 		}
+		if (this.boundQuestionSession && this.boundQuestionSession !== this.session) {
+			this.boundQuestionSession.setWebQuestionHandler(undefined);
+		}
+		this.boundQuestionSession = this.session;
+		this.session.setWebQuestionHandler({
+			hasClients: () => this.sseClients.size > 0,
+			requestQuestions: (req, signal) => this.requestWebQuestions(req, signal),
+		});
 		this.unsubscribeSession = this.session.subscribe((event: AgentSessionEvent) => {
 			if (event.type === "agent_end") {
 				this.maybeAutoNameSession();
@@ -199,6 +217,33 @@ export class PiWebServer {
 			});
 	}
 
+	private requestWebQuestions(request: AskQuestionsRequest, signal?: AbortSignal): Promise<AskQuestionsResponse> {
+		if (signal?.aborted) {
+			return Promise.resolve({ answers: [], cancelled: true });
+		}
+		if (this.pendingQuestion) {
+			this.pendingQuestion.finish({ answers: [], cancelled: true });
+		}
+		return new Promise((resolve) => {
+			const id = randomUUID();
+			let settled = false;
+			const finish = (response: AskQuestionsResponse) => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				if (this.pendingQuestion?.id === id) {
+					this.pendingQuestion = undefined;
+				}
+				this.broadcastRaw({ type: "question_closed", id });
+				resolve(response);
+			};
+			const onAbort = () => finish({ answers: [], cancelled: true });
+			signal?.addEventListener("abort", onAbort, { once: true });
+			this.pendingQuestion = { id, request, finish };
+			this.broadcastRaw({ type: "question_request", id, request });
+		});
+	}
+
 	async start(): Promise<string> {
 		if (this.server && this.actualPort !== undefined) {
 			return this.getUrl()!;
@@ -239,6 +284,13 @@ export class PiWebServer {
 	}
 
 	async stop(): Promise<void> {
+		if (this.pendingQuestion) {
+			this.pendingQuestion.finish({ answers: [], cancelled: true });
+		}
+		if (this.boundQuestionSession) {
+			this.boundQuestionSession.setWebQuestionHandler(undefined);
+			this.boundQuestionSession = undefined;
+		}
 		if (this.unsubscribeSession) {
 			this.unsubscribeSession();
 			this.unsubscribeSession = undefined;
@@ -348,6 +400,15 @@ export class PiWebServer {
 			});
 			res.write(": connected\n\n");
 			this.sseClients.add(res);
+			if (this.pendingQuestion) {
+				res.write(
+					`data: ${JSON.stringify({
+						type: "question_request",
+						id: this.pendingQuestion.id,
+						request: this.pendingQuestion.request,
+					})}\n\n`,
+				);
+			}
 			req.on("close", () => this.sseClients.delete(res));
 			return;
 		}
@@ -649,6 +710,20 @@ export class PiWebServer {
 			return;
 		}
 
+		if (req.method === "POST" && pathname === "/api/questions/answer") {
+			const body = await this.readJsonBody(req);
+			const id = typeof body.id === "string" ? body.id : "";
+			if (!this.pendingQuestion || this.pendingQuestion.id !== id) {
+				this.sendJson(res, 404, { error: "No matching pending question" });
+				return;
+			}
+			const cancelled = body.cancelled === true;
+			const answers = Array.isArray(body.answers) ? (body.answers as AskQuestionAnswer[]) : [];
+			this.pendingQuestion.finish({ cancelled, answers });
+			this.sendJson(res, 200, { ok: true });
+			return;
+		}
+
 		if (req.method === "POST" && pathname === "/api/abort") {
 			await this.session.abort();
 			this.sendJson(res, 200, { ok: true });
@@ -796,6 +871,7 @@ export class PiWebServer {
 					"gemini-cli",
 				],
 				codemodeEnabled: sm.getCodemodeEnabled(),
+				questionsEnabled: sm.getQuestionsEnabled(),
 				hideThinkingBlock: sm.getHideThinkingBlock(),
 				quietStartup: sm.getQuietStartup(),
 				autoUpdate: sm.getAutoUpdate(),
@@ -869,6 +945,16 @@ export class PiWebServer {
 						? active
 						: [...active, "codemode"]
 					: active.filter((name) => name !== "codemode");
+				this.session.setActiveToolsByName(next);
+			}
+			if (typeof body.questionsEnabled === "boolean") {
+				sm.setQuestionsEnabled(body.questionsEnabled);
+				const active = this.session.getActiveToolNames();
+				const next = body.questionsEnabled
+					? active.includes("ask_questions")
+						? active
+						: [...active, "ask_questions"]
+					: active.filter((name) => name !== "ask_questions");
 				this.session.setActiveToolsByName(next);
 			}
 			await sm.flush();

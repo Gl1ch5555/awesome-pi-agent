@@ -118,6 +118,7 @@ export interface SettingsConfig {
 	search?: SearchSettings;
 	memory?: Required<MemorySettings>;
 	codemodeEnabled?: boolean;
+	questionsEnabled?: boolean;
 	webUiEnabled?: boolean;
 	tuiStyle?: TuiStyle;
 	themeAccent?: ThemeAccent;
@@ -172,6 +173,7 @@ export interface SettingsCallbacks {
 	onOpenSync?: () => void;
 	onMemorySettingsChange?: (patch: Partial<MemorySettings>) => void;
 	onCodemodeEnabledChange?: (enabled: boolean) => void;
+	onQuestionsEnabledChange?: (enabled: boolean) => void;
 	onWebUiEnabledChange?: (enabled: boolean) => void;
 	onTuiStyleChange?: (style: TuiStyle) => void;
 	onThemeAccentChange?: (accent: ThemeAccent) => void;
@@ -884,6 +886,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "questions-enabled",
+				label: "Question test mode",
+				description: "Allow agent to ask up to 40 test-style questions at once (ask_questions)",
+				currentValue: config.questionsEnabled !== false ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "web-ui-enabled",
 				label: "Web UI (localhost)",
 				description: "Run parallel browser/PWA workspace on localhost alongside terminal TUI",
@@ -1220,6 +1229,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "codemode-enabled":
 						callbacks.onCodemodeEnabledChange?.(newValue === "true");
+						break;
+					case "questions-enabled":
+						callbacks.onQuestionsEnabledChange?.(newValue === "true");
 						break;
 					case "web-ui-enabled":
 						callbacks.onWebUiEnabledChange?.(newValue === "true");

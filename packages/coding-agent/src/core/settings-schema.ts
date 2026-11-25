@@ -377,6 +377,15 @@ const CodemodeSettingsSchema = Type.Object({
 	),
 });
 
+const QuestionsSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Enable built-in ask_questions quiz/test mode (up to 40 structured questions at once).",
+			default: SETTINGS_DEFAULTS.questions.enabled,
+		}),
+	),
+});
+
 const PackageSourceSchema = Type.Union(
 	[
 		Type.String({ description: "Load all resources from the package." }),
@@ -618,6 +627,7 @@ export const SettingsSchema = Type.Object(
 		),
 		onboardingCompleted: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.onboardingCompleted })),
 		codemode: Type.Optional(CodemodeSettingsSchema),
+		questions: Type.Optional(QuestionsSettingsSchema),
 		sessionDir: Type.Optional(
 			Type.String({
 				description: "Custom session storage directory, in the same format as the --session-dir CLI flag.",
@@ -714,6 +724,7 @@ export interface ProxySettings extends Static<typeof ProxySettingsSchema> {}
 export type AutoUpdateMode = NonNullable<SettingsInput["autoUpdate"]>;
 export type CodemodeMode = Static<typeof CodemodeModeSchema>;
 export interface CodemodeSettings extends Static<typeof CodemodeSettingsSchema> {}
+export interface QuestionsSettings extends Static<typeof QuestionsSettingsSchema> {}
 export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust"]>;
 export type QuietStartup = NonNullable<SettingsInput["quietStartup"]>;
 export type TransportSetting = NonNullable<SettingsInput["transport"]>;

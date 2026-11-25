@@ -855,6 +855,16 @@
         }
       }
     },
+    "questions": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable built-in ask_questions quiz/test mode (up to 40 structured questions at once).",
+          "default": true
+        }
+      }
+    },
     "sessionDir": {
       "type": "string",
       "description": "Custom session storage directory, in the same format as the --session-dir CLI flag."

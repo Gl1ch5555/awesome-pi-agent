@@ -192,6 +192,8 @@ import { ProviderManagerComponent } from "./components/provider-manager.ts";
 import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
+import type { AskQuestionsRequest, AskQuestionsResponse } from "../../core/tools/ask-questions.ts";
+import { QuizDialogComponent } from "./components/quiz-dialog.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import {
@@ -2257,6 +2259,7 @@ export class InteractiveMode {
 	 * Initialize the extension system with TUI-based UI context.
 	 */
 	private async bindCurrentSessionExtensions(): Promise<void> {
+		this.session.setTuiQuestionHandler((req, signal) => this.showQuizDialog(req, signal));
 		const uiContext = this.createExtensionUIContext();
 		await this.session.bindExtensions({
 			uiContext,
@@ -2989,6 +2992,34 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
+	}
+
+	private showQuizDialog(request: AskQuestionsRequest, signal?: AbortSignal): Promise<AskQuestionsResponse> {
+		if (signal?.aborted) {
+			return Promise.resolve({ answers: [], cancelled: true });
+		}
+		return new Promise((resolve) => {
+			let settled = false;
+			let component: QuizDialogComponent | undefined;
+			const finish = (response: AskQuestionsResponse) => {
+				if (settled) return;
+				settled = true;
+				signal?.removeEventListener("abort", onAbort);
+				if (component) {
+					component.dispose();
+					this.removeExtensionDialog(component);
+				}
+				resolve(response);
+			};
+			const onAbort = () => finish({ answers: [], cancelled: true });
+			signal?.addEventListener("abort", onAbort, { once: true });
+
+			component = new QuizDialogComponent(this.ui, request, (response) => finish(response));
+			this.pushExtensionDialog(component, {
+				kind: "question",
+				message: request.title ?? `Quiz (${request.questions.length})`,
+			});
+		});
 	}
 
 	/**
@@ -5491,6 +5522,7 @@ export class InteractiveMode {
 					search: this.settingsManager.getSearchSettings(),
 					memory: this.settingsManager.getMemorySettings(),
 					codemodeEnabled: this.settingsManager.getCodemodeEnabled(),
+					questionsEnabled: this.settingsManager.getQuestionsEnabled(),
 					webUiEnabled: this.settingsManager.getWebUiSettings().enabled,
 					tuiStyle: this.settingsManager.getTuiStyle(),
 					themeAccent: this.settingsManager.getThemeAccent(),
@@ -5718,6 +5750,18 @@ export class InteractiveMode {
 							: active.filter((name) => name !== "codemode");
 						this.session.setActiveToolsByName(next);
 						this.showStatus(`Experimental Code Mode: ${enabled ? "on" : "off"}`);
+						this.triggerAutoSyncPush();
+					},
+					onQuestionsEnabledChange: (enabled) => {
+						this.settingsManager.setQuestionsEnabled(enabled);
+						const active = this.session.getActiveToolNames();
+						const next = enabled
+							? active.includes("ask_questions")
+								? active
+								: [...active, "ask_questions"]
+							: active.filter((name) => name !== "ask_questions");
+						this.session.setActiveToolsByName(next);
+						this.showStatus(`Question test mode: ${enabled ? "on" : "off"}`);
 						this.triggerAutoSyncPush();
 					},
 					onWebUiEnabledChange: (enabled) => {

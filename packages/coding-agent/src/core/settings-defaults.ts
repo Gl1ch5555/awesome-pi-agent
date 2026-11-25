@@ -59,6 +59,9 @@ export const SETTINGS_DEFAULTS = {
 		mode: "on",
 		inlineBudget: 3000,
 	},
+	questions: {
+		enabled: true,
+	},
 	cacheWarming: "idle",
 	tuiMode: "fullscreen",
 	tuiStyle: "native",

@@ -110,6 +110,7 @@ export const DEFAULT_TOOL_NAMES: readonly string[] = [
 	"skill_manage",
 	"web_search",
 	"web_fetch",
+	"ask_questions",
 ];
 
 /** Whether a tool selection entry is a `+name` or `-name` modifier. */
@@ -1682,6 +1683,17 @@ export class SettingsManager {
 		this.globalSettings.codemode ??= {};
 		this.globalSettings.codemode.enabled = enabled;
 		this.markModified("codemode", "enabled");
+		this.save();
+	}
+
+	getQuestionsEnabled(): boolean {
+		return this.settings.questions?.enabled ?? SETTINGS_DEFAULTS.questions.enabled;
+	}
+
+	setQuestionsEnabled(enabled: boolean): void {
+		this.globalSettings.questions ??= {};
+		this.globalSettings.questions.enabled = enabled;
+		this.markModified("questions", "enabled");
 		this.save();
 	}
 

@@ -8,6 +8,7 @@
 
 import type { ToolRenderers } from "../../extensions/types.ts";
 import type { ToolName } from "../index.ts";
+import { askQuestionsRenderers } from "./ask-questions.ts";
 import { createShellRenderers } from "./bash.ts";
 import { editRenderers } from "./edit.ts";
 import { findRenderers } from "./find.ts";
@@ -22,6 +23,7 @@ import { writeRenderers } from "./write.ts";
 export type { ToolRenderers };
 
 export {
+	askQuestionsRenderers,
 	createShellRenderers,
 	editRenderers,
 	findRenderers,
@@ -50,6 +52,7 @@ export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 		skill_manage: skillManageRenderers,
 		web_search: webSearchRenderers,
 		web_fetch: webFetchRenderers,
+		ask_questions: askQuestionsRenderers,
 	};
 }
 

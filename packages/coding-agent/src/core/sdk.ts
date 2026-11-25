@@ -295,6 +295,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (
 		!options.noTools &&
 		!options.tools &&
+		!settingsManager.getQuestionsEnabled()
+	) {
+		const idx = initialActiveToolNames.indexOf("ask_questions");
+		if (idx !== -1) initialActiveToolNames.splice(idx, 1);
+	}
+	if (
+		!options.noTools &&
+		!options.tools &&
 		settingsManager.getCodemodeEnabled() &&
 		!isExcludedTool?.("codemode") &&
 		!initialActiveToolNames.includes("codemode")
