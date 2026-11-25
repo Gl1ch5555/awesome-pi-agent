@@ -4416,9 +4416,12 @@ export class InteractiveMode {
 							this.chatContainer.addChild(userComponent);
 						}
 					} else if (textContent === "Continue from where you stopped without repeating what you already wrote.") {
-						const prevChild = this.chatContainer.children[this.chatContainer.children.length - 1];
-						if (prevChild instanceof AssistantMessageComponent) {
-							prevChild.setSuppressLengthNotice(true);
+						for (let i = this.chatContainer.children.length - 1; i >= 0; i--) {
+							const child = this.chatContainer.children[i];
+							if (child instanceof AssistantMessageComponent) {
+								child.setSuppressLengthNotice(true);
+								break;
+							}
 						}
 						this.chatContainer.addChild(new Text(theme.fg("dim", "  ↻ Continuing response…"), this.outputPad, 0));
 					} else {

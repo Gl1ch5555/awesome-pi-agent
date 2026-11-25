@@ -1274,6 +1274,7 @@ export class AgentSession {
 				this._lastAssistantMessage = assistantMsg;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
+					this._lengthContinueCount = 0;
 				}
 
 				// Reset retry counter immediately on successful assistant response
@@ -3240,7 +3241,7 @@ export class AgentSession {
 			hasPartialOutput &&
 			((contextWindow >= 32_768 && directContextTokensForLength < contextWindow * 0.5) || !recoverableLength);
 		if (isLowContextLengthStop) {
-			if (!this._agentRunAbortRequested && this._lengthContinueCount < 3 && !this.agent.hasQueuedMessages()) {
+			if (!this._agentRunAbortRequested && this._lengthContinueCount < 5 && !this.agent.hasQueuedMessages()) {
 				this._lengthContinueCount++;
 				this.agent.followUp({
 					role: "user",

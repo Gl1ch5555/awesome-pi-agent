@@ -124,7 +124,7 @@ function buildRules(
 	}
 	if (selectedTools.includes("codemode")) {
 		addRule(
-			"Experimental Code Mode is enabled: for multi-step, parallel, or batch operations (scanning files, chaining read/edit/bash calls, or filtering large outputs), prefer codemode to run JavaScript via tools.* in one turn",
+			"Experimental Code Mode is enabled: use codemode to batch read/search/bash/filter operations via tools.* in one turn, but keep scripts concise (<80 lines) and prefer direct edit/write tools for large file changes so responses never truncate",
 		);
 	}
 	for (const rule of promptGuidelines) addRule(rule);

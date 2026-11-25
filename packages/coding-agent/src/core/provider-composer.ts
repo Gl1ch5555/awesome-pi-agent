@@ -248,6 +248,9 @@ function modelFromJson(
 					: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: null }
 			: definition.thinkingLevelMap;
 
+	const upgradeGeminiMaxTokens =
+		(isGemini4 || isGemini3Pro || isGemini3Flash) && (definition.maxTokens === undefined || definition.maxTokens <= 16384);
+
 	return {
 		id: definition.id,
 		name: definition.name ?? definition.id,
@@ -261,7 +264,7 @@ function modelFromJson(
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		promptCache: definition.promptCache,
 		contextWindow: definition.contextWindow ?? 128000,
-		maxTokens: definition.maxTokens ?? 16384,
+		maxTokens: upgradeGeminiMaxTokens ? 65536 : (definition.maxTokens ?? 16384),
 		samplingParams: definition.samplingParams,
 		samplingParamsByThinkingLevel: definition.samplingParamsByThinkingLevel,
 		headers: undefined,
