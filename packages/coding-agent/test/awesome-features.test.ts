@@ -1001,4 +1001,56 @@ describe("awesome-pi-agent customizations", () => {
 		const parsed = JSON.parse(readFileSync(cacheFile, "utf8"));
 		expect(parsed.attempted).toContain("gdtoolkit");
 	});
+
+	it("strips decorative tool label from LLM history in convertToLlm without mutating UI messages", async () => {
+		const { convertToLlm } = await import("../src/core/messages.js");
+		const originalMsg: any = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "call_1",
+					name: "bash",
+					arguments: { label: "Ищу крупные файлы", command: "find / -size +400M" },
+				},
+			],
+			api: "openai-completions",
+			provider: "openai",
+			model: "gpt-4o",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
+		const llm = convertToLlm([originalMsg]);
+		const llmCall = (llm[0] as any).content[0];
+		expect(llmCall.arguments).toEqual({ command: "find / -size +400M" });
+		expect("label" in llmCall.arguments).toBe(false);
+		expect(originalMsg.content[0].arguments.label).toBe("Ищу крупные файлы");
+	});
+
+	it("renders Left Accent Rail with label for bash/powershell and reveals raw command on expand", async () => {
+		const { createShellRenderers } = await import("../src/core/tools/renderers/bash.js");
+		const { stripAnsi } = await import("../src/utils/ansi.js");
+		const ps = createShellRenderers("PS>");
+		const ctxBase: any = {
+			argsComplete: true,
+			executionStarted: true,
+			isPartial: false,
+			state: {},
+			cwd: tempDir,
+			showImages: false,
+			isError: false,
+			invalidate: () => {},
+		};
+		const args = { label: "Ищу файлы > 400 МБ", command: "Get-ChildItem C:\\ -Recurse | Where-Object { $_.Length -gt 400MB }" };
+		const collapsed = ps.renderCall!(args, theme, { ...ctxBase, expanded: false });
+		const collapsedText = stripAnsi(collapsed.render(120).join("\n"));
+		expect(collapsedText).toContain("[ps]");
+		expect(collapsedText).toContain("Ищу файлы > 400 МБ");
+		expect(collapsedText).not.toContain("Get-ChildItem");
+
+		const expanded = ps.renderCall!(args, theme, { ...ctxBase, expanded: true });
+		const expandedText = stripAnsi(expanded.render(160).join("\n"));
+		expect(expandedText).toContain("Get-ChildItem");
+	});
 });

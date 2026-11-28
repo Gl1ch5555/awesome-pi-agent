@@ -38,6 +38,7 @@ import type { ModelRegistry } from "../../core/model-registry.ts";
 import { SETTINGS_DEFAULTS } from "../../core/settings-defaults.ts";
 import type { CodemodeMode } from "../../core/settings-manager.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "../../core/tools/tool-definition-wrapper.ts";
+import { TOOL_LABEL_DESCRIPTION } from "../../core/tools/render-utils.ts";
 import { loadCodemodeExecutor } from "./execute.lazy.ts";
 import { codemodeRenderers } from "./renderer.ts";
 
@@ -81,6 +82,7 @@ export interface CodemodeToolOptions {
 const TEXT_OUTPUT_SCHEMA: CodemodeJsonSchema = { type: "string" };
 
 export const codemodeSchema = Type.Object({
+	label: Type.Optional(Type.String({ description: TOOL_LABEL_DESCRIPTION })),
 	code: Type.String({
 		description: "Raw JavaScript source.",
 	}),

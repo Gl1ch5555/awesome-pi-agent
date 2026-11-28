@@ -9,19 +9,33 @@
 import { Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
+import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { LsToolDetails } from "../ls.ts";
-import { getTextOutput, renderToolPath, str } from "../render-utils.ts";
+import { formatLeftRailHeader, formatLeftRailPrefix, getTextOutput, renderToolPath, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
-function formatLsCall(args: { path?: string; limit?: number } | undefined, theme: Theme, cwd: string): string {
+function formatLsCall(
+	args: { label?: string; path?: string; limit?: number } | undefined,
+	theme: Theme,
+	cwd: string,
+	context?: ToolRenderContext,
+): string {
+	const label = str(args?.label)?.trim();
 	const limit = args?.limit;
 	const pathDisplay = renderToolPath(str(args?.path), theme, cwd, { emptyFallback: "." });
-	let text = `${theme.fg("toolTitle", theme.bold("ls"))} ${pathDisplay}`;
+	let rawText = `${theme.fg("toolTitle", theme.bold("ls"))} ${pathDisplay}`;
 	if (limit !== undefined) {
-		text += theme.fg("toolOutput", ` (limit ${limit})`);
+		rawText += theme.fg("toolOutput", ` (limit ${limit})`);
 	}
-	return text;
+
+	if (!label) return rawText;
+	const isActive = context ? !context.executionStarted || context.isPartial : false;
+	const railOpts = { isPartial: isActive, isError: context?.isError, isStreamingArgs: context?.argsComplete === false };
+	const header = formatLeftRailHeader(theme, { tag: "ls", label, ...railOpts });
+	if (context?.expanded) {
+		return `${header}\n${formatLeftRailPrefix(theme, railOpts)} ${rawText}`;
+	}
+	return header;
 }
 function formatLsResult(
 	result: {
@@ -59,7 +73,7 @@ function formatLsResult(
 export const lsRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-		text.setText(formatLsCall(args as any, theme, context.cwd));
+		text.setText(formatLsCall(args as any, theme, context.cwd, context));
 		return text;
 	},
 	renderResult(result, options, theme, context) {

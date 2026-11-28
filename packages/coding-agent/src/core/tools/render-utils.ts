@@ -249,6 +249,70 @@ export function invalidArgText(theme: Theme): string {
 	return theme.fg("error", "[invalid arg]");
 }
 
+export const TOOL_LABEL_DESCRIPTION =
+	"REQUIRED for UI display: short human-readable summary (3-7 words, in the user's language) written FIRST before other arguments, e.g. 'Search large files on C:'. Stripped from LLM history.";
+
+export interface LeftRailHeaderOptions {
+	tag: string;
+	label: string;
+	isPartial?: boolean;
+	isError?: boolean;
+	isStreamingArgs?: boolean;
+	suffix?: string;
+	timerText?: string;
+	nowMs?: number;
+}
+
+export function formatLeftRailPrefix(
+	theme: Theme,
+	options?: { isPartial?: boolean; isError?: boolean; isStreamingArgs?: boolean },
+): string {
+	if (options?.isError) return theme.fg("error", "┃");
+	if (options?.isPartial || options?.isStreamingArgs) return theme.fg("warning", "┃");
+	return theme.fg("success", "┃");
+}
+
+export function formatLeftRailHeader(theme: Theme, options: LeftRailHeaderOptions): string {
+	const now = options.nowMs ?? Date.now();
+	const tick = Math.floor(now / 180);
+	const isActive = Boolean(options.isPartial || options.isStreamingArgs);
+	const rail = formatLeftRailPrefix(theme, options);
+	const icon = options.isError
+		? theme.fg("error", "✗")
+		: isActive
+			? theme.fg("accent", SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!)
+			: theme.fg("success", "✓");
+	const tag = theme.fg("accent", `[${options.tag}]`);
+	const title = theme.fg("toolTitle", theme.bold(options.label));
+	let line = `${rail} ${icon} ${tag} ${title}`;
+	if (options.suffix) line += ` ${options.suffix}`;
+	if (options.timerText) line += ` ${theme.fg(isActive ? "warning" : "dim", options.timerText)}`;
+	return line;
+}
+
+export function prefixLinesWithRail(
+	theme: Theme,
+	text: string,
+	options?: { isPartial?: boolean; isError?: boolean; isStreamingArgs?: boolean },
+): string {
+	const rail = formatLeftRailPrefix(theme, options);
+	return text
+		.split("\n")
+		.map((line) => `${rail} ${line}`)
+		.join("\n");
+}
+
+export function summarizeShellCommandFallback(command: string): string {
+	let clean = command.replace(/\r/g, "").trim();
+	// Strip outer powershell.exe -NoProfile -Command "..." or bash -lc "..." wrappers
+	clean = clean.replace(/^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-\w+\s+)*-Command\s+["']?/i, "");
+	clean = clean.replace(/^(?:bash|sh|zsh)\s+-(?:l|c|lc)\s+["']?/i, "");
+	clean = clean.replace(/["']\s*$/, "");
+	clean = clean.replace(/\s+/g, " ").trim();
+	if (!clean) return "Running command...";
+	return clean.length > 72 ? `${clean.slice(0, 69)}...` : clean;
+}
+
 export function renderToolPath(
 	rawPath: string | null,
 	theme: Theme,

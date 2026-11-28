@@ -127,6 +127,12 @@ function buildRules(
 			"Experimental Code Mode is enabled: use codemode to batch read/search/bash/filter operations via tools.* in one turn, but keep scripts concise (<80 lines) and prefer direct edit/write tools for large file changes so responses never truncate",
 		);
 	}
+	const labeledTools = ["bash", "powershell", "codemode", "grep", "find", "ls", "web_search", "web_fetch"];
+	if (selectedTools.some((name) => labeledTools.includes(name))) {
+		addRule(
+			"ALWAYS pass a concise human-readable `label` (3-7 words in the user's language, e.g. 'Find large files on C:' or 'Ищу крупные файлы на диске C') as the FIRST argument of bash, powershell, codemode, grep, find, ls, web_search, and web_fetch. The UI hides raw commands behind this label; it is stripped from conversation history.",
+		);
+	}
 	for (const rule of promptGuidelines) addRule(rule);
 	addRule("Be concise in your responses");
 	addRule("Show file paths clearly when working with files");

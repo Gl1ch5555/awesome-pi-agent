@@ -183,7 +183,26 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					};
 				case "system":
 				case "user":
-				case "assistant":
+				case "assistant": {
+					if (!Array.isArray(m.content)) return m;
+					let changed = false;
+					const strippedContent = m.content.map((block) => {
+						if (
+							block &&
+							typeof block === "object" &&
+							block.type === "toolCall" &&
+							block.arguments &&
+							typeof block.arguments === "object" &&
+							"label" in block.arguments
+						) {
+							changed = true;
+							const { label: _stripped, ...restArgs } = block.arguments as Record<string, unknown>;
+							return { ...block, arguments: restArgs };
+						}
+						return block;
+					});
+					return changed ? ({ ...m, content: strippedContent } as Message) : m;
+				}
 				case "toolResult":
 					return m;
 				default:

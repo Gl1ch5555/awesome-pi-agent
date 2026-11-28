@@ -9,29 +9,39 @@
 import { Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
-import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
+import type { ToolDefinition, ToolRenderContext, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { GrepToolDetails } from "../grep.ts";
-import { getTextOutput, invalidArgText, shortenPath, str } from "../render-utils.ts";
+import { formatLeftRailHeader, formatLeftRailPrefix, getTextOutput, invalidArgText, shortenPath, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 function formatGrepCall(
-	args: { pattern: string; path?: string; glob?: string; limit?: number } | undefined,
+	args: { label?: string; pattern: string; path?: string; glob?: string; limit?: number } | undefined,
 	theme: Theme,
+	context?: ToolRenderContext,
 ): string {
+	const label = str(args?.label)?.trim();
 	const pattern = str(args?.pattern);
 	const rawPath = str(args?.path);
 	const path = rawPath !== null ? shortenPath(rawPath || ".") : null;
 	const glob = str(args?.glob);
 	const limit = args?.limit;
 	const invalidArg = invalidArgText(theme);
-	let text =
+	let rawText =
 		theme.fg("toolTitle", theme.bold("grep")) +
 		" " +
 		(pattern === null ? invalidArg : theme.fg("accent", `/${pattern || ""}/`)) +
 		theme.fg("toolOutput", ` in ${path === null ? invalidArg : path}`);
-	if (glob) text += theme.fg("toolOutput", ` (${glob})`);
-	if (limit !== undefined) text += theme.fg("toolOutput", ` limit ${limit}`);
-	return text;
+	if (glob) rawText += theme.fg("toolOutput", ` (${glob})`);
+	if (limit !== undefined) rawText += theme.fg("toolOutput", ` limit ${limit}`);
+
+	if (!label) return rawText;
+	const isActive = context ? !context.executionStarted || context.isPartial : false;
+	const railOpts = { isPartial: isActive, isError: context?.isError, isStreamingArgs: context?.argsComplete === false };
+	const header = formatLeftRailHeader(theme, { tag: "grep", label, ...railOpts });
+	if (context?.expanded) {
+		return `${header}\n${formatLeftRailPrefix(theme, railOpts)} ${rawText}`;
+	}
+	return header;
 }
 function formatGrepResult(
 	result: {
@@ -71,7 +81,7 @@ function formatGrepResult(
 export const grepRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
 	renderCall(args, theme, context) {
 		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-		text.setText(formatGrepCall(args as any, theme));
+		text.setText(formatGrepCall(args as any, theme, context));
 		return text;
 	},
 	renderResult(result, options, theme, context) {

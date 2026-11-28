@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { scopedFetch } from "../http-dispatcher.ts";
 import type { SearchProviderId, SearchSettings } from "../settings-schema.ts";
+import { TOOL_LABEL_DESCRIPTION } from "./render-utils.ts";
 
 export interface SearchProviderMeta {
 	id: SearchProviderId;
@@ -116,6 +117,7 @@ export interface WebSearchToolOptions {
 }
 
 const WebSearchSchema = Type.Object({
+	label: Type.Optional(Type.String({ description: TOOL_LABEL_DESCRIPTION })),
 	query: Type.String({ minLength: 1, description: "Search query." }),
 	limit: Type.Optional(
 		Type.Number({ minimum: 1, maximum: 20, description: "Maximum number of results (default 6)." }),

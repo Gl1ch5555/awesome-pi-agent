@@ -10,14 +10,17 @@
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
 import {
+	formatLeftRailHeader,
+	formatLeftRailPrefix,
 	formatLiveStatusBar,
+	formatToolDuration,
 	getTextOutput,
+	prefixLinesWithRail,
 	replaceTabs,
 	startSmoothProgressTimer,
 	startToolTimer,
 	str,
 	toolTimerText,
-	formatToolDuration,
 } from "../../core/tools/render-utils.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { VisualLinePreview } from "../../modes/interactive/components/visual-truncate.ts";
@@ -84,14 +87,26 @@ export const codemodeRenderers: Pick<
 	renderCall(args, theme, context) {
 		startToolTimer(context);
 		// The code includes the `// @options:` line, so options show as part of the script.
-		const code = str((args as { code?: unknown } | undefined)?.code);
+		const typedArgs = args as { label?: unknown; code?: unknown } | undefined;
+		const label = str(typedArgs?.label)?.trim();
+		const code = str(typedArgs?.code);
 		const isStreamingArgs = context.argsComplete === false;
+		const isActive = !context.executionStarted || context.isPartial;
+		const railOpts = { isPartial: isActive, isError: context.isError, isStreamingArgs };
 		const lineCount = code ? code.split("\n").length : 0;
-		const title = isStreamingArgs
-			? `${theme.fg("toolTitle", theme.bold("codemode"))} ${theme.fg("dim", `(streaming… ${lineCount} lines)`)}`
+		const suffix = isStreamingArgs
+			? theme.fg("dim", `(streaming… ${lineCount} lines)`)
 			: context.expanded
-				? theme.fg("toolTitle", theme.bold("codemode"))
-				: `${theme.fg("toolTitle", theme.bold("codemode"))}${lineCount > 0 ? ` ${theme.fg("dim", `(${lineCount} lines ·`)} ${keyHint("app.tools.expand", "to show script")}${theme.fg("dim", ")")}` : ""}`;
+				? undefined
+				: lineCount > 0
+					? `${theme.fg("dim", `(${lineCount} lines ·`)} ${keyHint("app.tools.expand", "to show script")}${theme.fg("dim", ")")}`
+					: undefined;
+		const title = formatLeftRailHeader(theme, {
+			tag: "code",
+			label: label || "codemode",
+			...railOpts,
+			suffix,
+		});
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		if (code === null) {
@@ -105,7 +120,7 @@ export const codemodeRenderers: Pick<
 			const highlighted = state.scriptHighlighter
 				.highlight(replaceTabs(code.replace(/\r/g, "").trimEnd()), "javascript")
 				.join("\n");
-			component.addChild(new Text(highlighted, 0, 0));
+			component.addChild(new Text(prefixLinesWithRail(theme, highlighted, railOpts), 0, 0));
 		}
 		return component;
 	},
@@ -119,14 +134,14 @@ export const codemodeRenderers: Pick<
 			const runningCall = [...calls].reverse().find((c) => c.status === "running");
 			const prog = result.details?.progress;
 			const stage = prog?.label ?? (runningCall ? `${runningCall.name} ${runningCall.args}`.trim() : "Running script...");
-			component.addChild(new Spacer(1));
+			const rail = formatLeftRailPrefix(theme, { isPartial: true, isError: context.isError });
 			component.addChild(
 				new Text(
-					formatLiveStatusBar(theme, {
+					`${rail} ${formatLiveStatusBar(theme, {
 						percent: prog?.percent,
 						stage: stage.length > 64 ? `${stage.slice(0, 61)}...` : stage,
 						timerText,
-					}),
+					})}`,
 					0,
 					0,
 				),

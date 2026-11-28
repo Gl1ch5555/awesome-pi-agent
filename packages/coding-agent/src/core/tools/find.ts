@@ -6,6 +6,7 @@ import { type Static, Type } from "typebox";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
+import { TOOL_LABEL_DESCRIPTION } from "./render-utils.ts";
 import { findRenderers } from "./renderers/find.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
@@ -24,6 +25,7 @@ export function relativizeFindResultPath(
 }
 
 const findSchema = Type.Object({
+	label: Type.Optional(Type.String({ description: TOOL_LABEL_DESCRIPTION })),
 	pattern: Type.String({
 		description:
 			"Glob pattern relative to the search directory, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth",

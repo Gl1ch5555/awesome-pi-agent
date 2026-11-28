@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "../extensions/types.ts";
 import { scopedFetch } from "../http-dispatcher.ts";
 import type { SearchSettings } from "../settings-schema.ts";
+import { TOOL_LABEL_DESCRIPTION } from "./render-utils.ts";
 import { resolveSearchApiKey } from "./web-search.ts";
 
 export interface WebFetchToolDetails {
@@ -15,6 +16,7 @@ export interface WebFetchToolOptions {
 }
 
 const WebFetchSchema = Type.Object({
+	label: Type.Optional(Type.String({ description: TOOL_LABEL_DESCRIPTION })),
 	url: Type.String({ minLength: 1, description: "HTTP or HTTPS URL to fetch." }),
 	max_chars: Type.Optional(
 		Type.Number({ minimum: 500, maximum: 80000, description: "Maximum characters to return (default 18000)." }),

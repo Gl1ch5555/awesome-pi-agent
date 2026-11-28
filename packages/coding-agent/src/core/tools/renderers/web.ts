@@ -2,7 +2,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
-import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
+import { formatLeftRailHeader, formatLeftRailPrefix, getTextOutput, invalidArgText, str } from "../render-utils.ts";
 
 function formatOutputLines(
 	output: string,
@@ -23,14 +23,19 @@ function formatOutputLines(
 }
 
 export const webSearchRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
-	renderCall(rawArgs: unknown, theme: Theme) {
-		const args = rawArgs as { query?: string; provider?: string } | undefined;
+	renderCall(rawArgs: unknown, theme: Theme, context) {
+		const args = rawArgs as { label?: string; query?: string; provider?: string } | undefined;
+		const label = str(args?.label)?.trim();
 		const query = str(args?.query);
 		const provider = str(args?.provider);
-		let text = theme.fg("toolTitle", theme.bold("web_search")) + " ";
-		text += query === null ? invalidArgText(theme) : theme.fg("accent", `"${query || ""}"`);
-		if (provider) text += theme.fg("muted", ` [${provider}]`);
-		return new Text(text, 0, 0);
+		let rawText = theme.fg("toolTitle", theme.bold("web_search")) + " ";
+		rawText += query === null ? invalidArgText(theme) : theme.fg("accent", `"${query || ""}"`);
+		if (provider) rawText += theme.fg("muted", ` [${provider}]`);
+		if (!label) return new Text(rawText, 0, 0);
+		const isActive = !context.executionStarted || context.isPartial;
+		const railOpts = { isPartial: isActive, isError: context.isError, isStreamingArgs: context.argsComplete === false };
+		const header = formatLeftRailHeader(theme, { tag: "web", label, ...railOpts });
+		return new Text(context.expanded ? `${header}\n${formatLeftRailPrefix(theme, railOpts)} ${rawText}` : header, 0, 0);
 	},
 	renderResult(result, options, theme) {
 		const output = getTextOutput(result, false).trim();
@@ -39,14 +44,19 @@ export const webSearchRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "
 };
 
 export const webFetchRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {
-	renderCall(rawArgs: unknown, theme: Theme) {
-		const args = rawArgs as { url?: string } | undefined;
+	renderCall(rawArgs: unknown, theme: Theme, context) {
+		const args = rawArgs as { label?: string; url?: string } | undefined;
+		const label = str(args?.label)?.trim();
 		const url = str(args?.url);
-		const text =
+		const rawText =
 			theme.fg("toolTitle", theme.bold("web_fetch")) +
 			" " +
 			(url === null ? invalidArgText(theme) : theme.fg("accent", url || ""));
-		return new Text(text, 0, 0);
+		if (!label) return new Text(rawText, 0, 0);
+		const isActive = !context.executionStarted || context.isPartial;
+		const railOpts = { isPartial: isActive, isError: context.isError, isStreamingArgs: context.argsComplete === false };
+		const header = formatLeftRailHeader(theme, { tag: "fetch", label, ...railOpts });
+		return new Text(context.expanded ? `${header}\n${formatLeftRailPrefix(theme, railOpts)} ${rawText}` : header, 0, 0);
 	},
 	renderResult(result, options, theme) {
 		const output = getTextOutput(result, false).trim();
