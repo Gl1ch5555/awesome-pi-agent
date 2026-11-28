@@ -902,4 +902,42 @@ describe("awesome-pi-agent customizations", () => {
 		expect(outline).toContain("L9 export const helper");
 		expect(outline).not.toContain("if (port > 0)");
 	});
+
+	it("extracts live progress and renders animated status bar without raw noise", async () => {
+		const { extractLiveProgress, formatLiveStatusBar } = await import("../src/core/tools/render-utils.js");
+		const parsed = extractLiveProgress("Step 1\nDownloading archive 42%\n");
+		expect(parsed.percent).toBe(42);
+		expect(parsed.stage).toContain("Downloading archive 42%");
+		const bar = formatLiveStatusBar(theme, {
+			percent: parsed.percent,
+			stage: parsed.stage,
+			timerText: "Elapsed 3s",
+			nowMs: 1800,
+		});
+		expect(bar).toContain("42%");
+		expect(bar).toContain("Downloading archive 42%");
+	});
+
+	it("hides raw codemode JS when collapsed and reveals it when expanded", async () => {
+		const { codemodeRenderers } = await import("../src/extensions/codemode/renderer.js");
+		const { stripAnsi } = await import("../src/utils/ansi.js");
+		const sampleCode = "const a = 1;\nconst b = 2;\nreturn a + b;";
+		const ctxBase: any = {
+			argsComplete: true,
+			executionStarted: false,
+			state: {},
+			cwd: tempDir,
+			showImages: false,
+			isError: false,
+			invalidate: () => {},
+		};
+		const collapsed = codemodeRenderers.renderCall({ code: sampleCode }, theme, { ...ctxBase, expanded: false });
+		const collapsedText = stripAnsi(collapsed.render(120).join("\n"));
+		expect(collapsedText).toContain("3 lines");
+		expect(collapsedText).not.toContain("const a = 1;");
+
+		const expanded = codemodeRenderers.renderCall({ code: sampleCode }, theme, { ...ctxBase, expanded: true });
+		const expandedText = stripAnsi(expanded.render(120).join("\n"));
+		expect(expandedText).toContain("const a = 1;");
+	});
 });

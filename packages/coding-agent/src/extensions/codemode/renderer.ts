@@ -9,7 +9,16 @@
 
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
-import { getTextOutput, replaceTabs, startToolTimer, str, toolTimerText, formatToolDuration } from "../../core/tools/render-utils.ts";
+import {
+	formatLiveStatusBar,
+	getTextOutput,
+	replaceTabs,
+	startSmoothProgressTimer,
+	startToolTimer,
+	str,
+	toolTimerText,
+	formatToolDuration,
+} from "../../core/tools/render-utils.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import { VisualLinePreview } from "../../modes/interactive/components/visual-truncate.ts";
 import { CodeHighlighter, type Theme } from "../../modes/interactive/theme/theme.ts";
@@ -80,7 +89,9 @@ export const codemodeRenderers: Pick<
 		const lineCount = code ? code.split("\n").length : 0;
 		const title = isStreamingArgs
 			? `${theme.fg("toolTitle", theme.bold("codemode"))} ${theme.fg("dim", `(streaming… ${lineCount} lines)`)}`
-			: theme.fg("toolTitle", theme.bold("codemode"));
+			: context.expanded
+				? theme.fg("toolTitle", theme.bold("codemode"))
+				: `${theme.fg("toolTitle", theme.bold("codemode"))}${lineCount > 0 ? ` ${theme.fg("dim", `(${lineCount} lines ·`)} ${keyHint("app.tools.expand", "to show script")}${theme.fg("dim", ")")}` : ""}`;
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		if (code === null) {
@@ -88,30 +99,39 @@ export const codemodeRenderers: Pick<
 			return component;
 		}
 		component.addChild(new Text(title, 0, 0));
-		if (code) {
+		if (code && context.expanded) {
 			const state = context.state as CodemodeRenderState;
 			state.scriptHighlighter ??= new CodeHighlighter();
 			const highlighted = state.scriptHighlighter
 				.highlight(replaceTabs(code.replace(/\r/g, "").trimEnd()), "javascript")
 				.join("\n");
-			component.addChild(
-				context.expanded
-					? new Text(highlighted, 0, 0)
-					: new VisualLinePreview({
-							text: highlighted,
-							maxVisualLines: CODE_PREVIEW_LINES,
-							keep: isStreamingArgs ? "end" : "start",
-							formatHint: (hidden) => expandHint(theme, hidden, "lines"),
-						}),
-			);
+			component.addChild(new Text(highlighted, 0, 0));
 		}
 		return component;
 	},
 	renderResult(result, options, theme, context) {
+		startSmoothProgressTimer(context, options.isPartial);
 		const timerText = toolTimerText(context, options.isPartial);
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		const calls = result.details?.calls ?? [];
+		if (options.isPartial && !options.expanded) {
+			const runningCall = [...calls].reverse().find((c) => c.status === "running");
+			const prog = result.details?.progress;
+			const stage = prog?.label ?? (runningCall ? `${runningCall.name} ${runningCall.args}`.trim() : "Running script...");
+			component.addChild(new Spacer(1));
+			component.addChild(
+				new Text(
+					formatLiveStatusBar(theme, {
+						percent: prog?.percent,
+						stage: stage.length > 64 ? `${stage.slice(0, 61)}...` : stage,
+						timerText,
+					}),
+					0,
+					0,
+				),
+			);
+		}
 		if (calls.length > 0) {
 			const shown = options.expanded ? calls : calls.slice(-CALL_PREVIEW_COUNT);
 			const lines = shown.map((call) => formatCall(call, theme, options.expanded));

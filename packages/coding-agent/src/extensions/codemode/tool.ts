@@ -106,6 +106,8 @@ export interface CodemodeNestedCall {
 
 export interface CodemodeToolDetails {
 	calls: CodemodeNestedCall[];
+	/** Live progress status reported via `progress(label, percent?)`. */
+	progress?: { label: string; percent?: number };
 	/** Temp file with the full text output, when the output was truncated. */
 	fullOutputPath?: string;
 }
@@ -132,6 +134,8 @@ function describeGlobals(models: boolean): string {
 		"- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block. `image()` also saves the image to a temp file and the result names its path.",
 		"- `store(key, value)` and `load(key)` keep JSON values across codemode calls.",
 		"- `await outline(path?, { maxFiles?, maxDepth?, maxSymbolsPerFile? })`: fast symbol map (line numbers, classes, functions) of a file or directory; use before reading large files to save tokens.",
+		"- `progress(label, percent?)`: optional live animated status bar update in the TUI.",
+		"- Long-running scripts (>25s, or starting with `// @background`) move to the background so chat stays unblocked: use `await poll(id?, { waitMs? })` and `await cancelBg(id)`.",
 		"- `ALL_TOOLS`, `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find unlisted tools, such as MCP tools.",
 	];
 	if (models) {

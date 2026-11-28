@@ -175,6 +175,76 @@ export function toolTimerText(context: ToolRenderContext<ToolTimerState>, isPart
 	return `${isPartial ? "Elapsed" : "Took"} ${formatToolDuration(endTime - state.startedAt)}`;
 }
 
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+export function extractLiveProgress(output: string): { percent?: number; stage?: string } {
+	const lines = output
+		.split(/\r?\n/)
+		.map((line) => stripAnsi(line).trim())
+		.filter((line) => line.length > 0 && !/^[-=_─━│┃┌┐└┘]+$/.test(line));
+	let percent: number | undefined;
+	for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
+		const line = lines[i]!;
+		const pctMatch = line.match(/(\d{1,3}(?:\.\d+)?)\s*%/);
+		if (pctMatch) {
+			const val = Number(pctMatch[1]);
+			if (Number.isFinite(val) && val >= 0 && val <= 100) {
+				percent = Math.round(val);
+				break;
+			}
+		}
+		const ratioMatch = line.match(/\[(\d+)\s*\/\s*(\d+)\]/);
+		if (ratioMatch) {
+			const cur = Number(ratioMatch[1]);
+			const total = Number(ratioMatch[2]);
+			if (Number.isFinite(cur) && Number.isFinite(total) && total > 0 && cur <= total) {
+				percent = Math.round((cur / total) * 100);
+				break;
+			}
+		}
+	}
+	const lastLine = lines[lines.length - 1];
+	const stage = lastLine ? (lastLine.length > 64 ? `${lastLine.slice(0, 61)}...` : lastLine) : undefined;
+	return { percent, stage };
+}
+
+export function formatLiveStatusBar(
+	theme: Theme,
+	options: { percent?: number; stage?: string; timerText?: string; nowMs?: number },
+): string {
+	const now = options.nowMs ?? Date.now();
+	const tick = Math.floor(now / 180);
+	const spinner = theme.fg("accent", SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!);
+
+	let bar: string;
+	if (typeof options.percent === "number" && Number.isFinite(options.percent)) {
+		const pct = Math.max(0, Math.min(100, Math.round(options.percent)));
+		const width = 14;
+		const filled = Math.round((pct / 100) * width);
+		const track = `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
+		bar = `${theme.fg("accent", `[${track}]`)} ${theme.fg("toolTitle", `${pct}%`)}`;
+	} else {
+		const width = 9;
+		const cycle = (width - 1) * 2;
+		const posRaw = tick % cycle;
+		const pos = posRaw < width ? posRaw : cycle - posRaw;
+		const track = `${"─".repeat(pos)}●${"─".repeat(width - 1 - pos)}`;
+		bar = theme.fg("muted", `[${track}]`);
+	}
+
+	const parts = [spinner, bar];
+	if (options.stage) parts.push(theme.fg("toolOutput", options.stage));
+	if (options.timerText) parts.push(theme.fg("dim", options.timerText));
+	return parts.join(" ");
+}
+
+export function startSmoothProgressTimer(context: ToolRenderContext<ToolTimerState>, isPartial: boolean): void {
+	const state = context.state;
+	if (state.startedAt !== undefined && isPartial && !state.interval) {
+		state.interval = setInterval(() => context.invalidate(), 200);
+	}
+}
+
 export function invalidArgText(theme: Theme): string {
 	return theme.fg("error", "[invalid arg]");
 }

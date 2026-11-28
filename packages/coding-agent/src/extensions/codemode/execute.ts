@@ -55,8 +55,36 @@ const MAX_CONCURRENT_MODEL_CALLS = 4;
  * `InternalError: out of memory` inside the script.
  */
 const CODEMODE_MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
-// Shared across calls and sessions. Allow one replacement while a cancelled worker is still exiting.
-const DEFAULT_MAX_CODEMODE_WORKERS = 2;
+// Shared across calls and sessions. Allow headroom for background builds/tests alongside quick scripts.
+const DEFAULT_MAX_CODEMODE_WORKERS = 4;
+const BACKGROUND_PROMOTE_MS = 25_000;
+const BACKGROUND_MAX_TIMEOUT_MS = 15 * 60_000;
+const MAX_STORED_BG_JOBS = 20;
+
+interface BackgroundCodemodeJob {
+	id: string;
+	startedAt: number;
+	finishedAt?: number;
+	status: "running" | "completed" | "failed" | "cancelled";
+	calls: CodemodeNestedCall[];
+	outputText?: string;
+	errorText?: string;
+	abortController: AbortController;
+	donePromise: Promise<void>;
+}
+
+const backgroundJobs = new Map<string, BackgroundCodemodeJob>();
+let nextBackgroundJobIndex = 1;
+
+function pruneBackgroundJobs(): void {
+	if (backgroundJobs.size <= MAX_STORED_BG_JOBS) return;
+	for (const [id, job] of backgroundJobs) {
+		if (backgroundJobs.size <= MAX_STORED_BG_JOBS) break;
+		if (job.status !== "running") {
+			backgroundJobs.delete(id);
+		}
+	}
+}
 
 /** `PI_CODEMODE_MAX_WORKERS` if it is a positive integer. Read per call so SDK hosts can set it at runtime. */
 function maxCodemodeWorkers(): number {
@@ -512,7 +540,11 @@ export async function executeCodemode(
 		modelUsage = modelUsage ? combineUsage(modelUsage, usage) : usage;
 	};
 
-	const snapshot = (): CodemodeToolDetails => ({ calls: calls.map((call) => ({ ...call })) });
+	let liveProgress: { label: string; percent?: number } | undefined;
+	const snapshot = (): CodemodeToolDetails => ({
+		calls: calls.map((call) => ({ ...call })),
+		...(liveProgress ? { progress: { ...liveProgress } } : {}),
+	});
 	const publish = () => onUpdate?.({ content: [], details: snapshot() });
 	// Show the script as running before its first nested call, so the row's timer starts.
 	publish();
@@ -553,6 +585,7 @@ export async function executeCodemode(
 	}));
 
 	// The wait for a worker counts toward the script's deadline.
+	const forceBackground = /^\/\/\s*@background\b/m.test(input.code);
 	const deadline = sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY;
 	const waitStartedAt = performance.now();
 	const admission = await reserveCodemodeWorker(signal, Math.min(deadline, CODEMODE_WORKER_WAIT_MS));
@@ -578,20 +611,47 @@ export async function executeCodemode(
 	// The reservation covers the one worker this script starts. A launch that resumes after the result
 	// settled finds it released and starts no worker.
 	let reserved = true;
+	let promotedToBackground = false;
+	const bgAbortController = new AbortController();
+	const onForegroundAbort = () => {
+		if (!promotedToBackground) {
+			bgAbortController.abort(signal?.reason);
+		}
+	};
+	signal?.addEventListener("abort", onForegroundAbort, { once: true });
+
+	const effectiveTimeoutMs = Number.isFinite(deadline)
+		? Math.max(1, Math.round(deadline - waitedMs))
+		: BACKGROUND_MAX_TIMEOUT_MS;
 
 	let sandbox: CodemodeSandbox | undefined;
-	let result: CodemodeResult;
-	try {
+	const runExecution = async (): Promise<CodemodeResult> => {
 		sandbox = new CodemodeSandbox({
 			tools: sandboxTools,
 			globals: [
 				...createDiscoveryGlobals(callable, samples, options),
 				createOutlineGlobal(ctx?.cwd ?? process.cwd()),
+				...createBackgroundPollGlobals(),
+				{
+					name: "progress",
+					spread: true,
+					execute: (args) => {
+						const [label, percent] = args as [unknown, unknown];
+						if (typeof label !== "string") return;
+						liveProgress = {
+							label: label.trim().slice(0, 80),
+							...(typeof percent === "number" && Number.isFinite(percent)
+								? { percent: Math.max(0, Math.min(100, Math.round(percent))) }
+								: {}),
+						};
+						publish();
+					},
+				},
 				...(options.models && ctx
 					? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
 					: []),
 			],
-			timeoutMs: Math.max(1, Math.round(deadline - waitedMs)),
+			timeoutMs: effectiveTimeoutMs,
 			memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
 			wasm: loadQuickJSWasm(getQuickJSWasmPath()),
 			workerUrl: getCodemodeWorkerSpecifier(),
@@ -603,7 +663,80 @@ export async function executeCodemode(
 			},
 		});
 		const store = ctx ? readCodemodeStore(ctx.sessionManager.getBranch()) : {};
-		result = await sandbox.execute(code, { signal, store });
+		return sandbox.execute(code, { signal: bgAbortController.signal, store });
+	};
+
+	const bgPromoteMs = forceBackground ? 150 : BACKGROUND_PROMOTE_MS;
+	const executionPromise = runExecution();
+
+	const raceResult = await Promise.race([
+		executionPromise.then((res) => ({ kind: "settled" as const, result: res })),
+		new Promise<{ kind: "background" }>((resolveBg) => {
+			const timer = setTimeout(() => resolveBg({ kind: "background" }), bgPromoteMs);
+			executionPromise.finally(() => clearTimeout(timer)).catch(() => {});
+		}),
+	]);
+
+	if (raceResult.kind === "background") {
+		promotedToBackground = true;
+		signal?.removeEventListener("abort", onForegroundAbort);
+		const jobId = `bg-${nextBackgroundJobIndex++}`;
+		const job: BackgroundCodemodeJob = {
+			id: jobId,
+			startedAt,
+			status: "running",
+			calls,
+			abortController: bgAbortController,
+			donePromise: executionPromise
+				.then(async (bgRes) => {
+					job.finishedAt = performance.now();
+					if (bgAbortController.signal.aborted) {
+						job.status = "cancelled";
+						job.errorText = "Cancelled";
+					} else if (bgRes.ok) {
+						job.status = "completed";
+						const out = [...bgRes.output];
+						if (bgRes.value !== undefined) out.push({ type: "text", text: valueText(bgRes.value) });
+						job.outputText = out
+							.filter((i): i is { type: "text"; text: string } => i.type === "text")
+							.map((i) => i.text)
+							.join("\n")
+							.slice(-16_000);
+					} else {
+						job.status = "failed";
+						job.errorText = formatError(bgRes, calls);
+					}
+				})
+				.catch((err) => {
+					job.finishedAt = performance.now();
+					job.status = bgAbortController.signal.aborted ? "cancelled" : "failed";
+					job.errorText = err instanceof Error ? err.message : String(err);
+				})
+				.finally(async () => {
+					await sandbox?.close();
+					if (reserved) {
+						reserved = false;
+						releaseCodemodeWorker();
+					}
+				}),
+		};
+		backgroundJobs.set(jobId, job);
+		pruneBackgroundJobs();
+		const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
+		const msg = `Script moved to background (id: ${jobId}, elapsed: ${wallTime}s). Chat is unblocked.\nUse \`await poll("${jobId}", { waitMs: 5000 })\` in codemode to check progress/output, or \`await cancelBg("${jobId}")\` to stop it.`;
+		return {
+			content: [
+				{ type: "text", text: `Script completed\nWall time ${wallTime} seconds\nOutput:\n` },
+				{ type: "text", text: msg },
+			],
+			details: snapshot(),
+		};
+	}
+
+	signal?.removeEventListener("abort", onForegroundAbort);
+	let result: CodemodeResult;
+	try {
+		result = raceResult.result;
 	} finally {
 		await sandbox?.close();
 		if (reserved) {
@@ -662,6 +795,60 @@ function isNamespaceName(namespace: ToolNamespace, query: string): boolean {
 	return [namespace.name, ...(namespace.aliases ?? [])].some(
 		(name) => name === query || toCodemodeIdentifier(name) === queryId,
 	);
+}
+
+function formatBgJob(job: BackgroundCodemodeJob) {
+	const elapsedSec = Number((((job.finishedAt ?? performance.now()) - job.startedAt) / 1000).toFixed(1));
+	return {
+		id: job.id,
+		status: job.status,
+		elapsedSec,
+		calls: job.calls.map((c) => ({ name: c.name, status: c.status, args: c.args })),
+		...(job.outputText !== undefined ? { output: job.outputText } : {}),
+		...(job.errorText !== undefined ? { error: job.errorText } : {}),
+	};
+}
+
+function createBackgroundPollGlobals(): CodemodeTool[] {
+	return [
+		{
+			name: "poll",
+			spread: true,
+			execute: async (args) => {
+				const [id, opts] = args as [unknown, { waitMs?: unknown } | undefined];
+				if (id === undefined || id === null) {
+					return [...backgroundJobs.values()].map(formatBgJob);
+				}
+				if (typeof id !== "string") throw new Error("poll() expects a job id string");
+				const job = backgroundJobs.get(id);
+				if (!job) throw new Error(`Unknown background job: ${id}`);
+				const waitMs =
+					typeof opts?.waitMs === "number" && opts.waitMs > 0 ? Math.min(opts.waitMs, 20_000) : 0;
+				if (waitMs > 0 && job.status === "running") {
+					await Promise.race([
+						job.donePromise,
+						new Promise<void>((resolve) => setTimeout(resolve, waitMs)),
+					]);
+				}
+				return formatBgJob(job);
+			},
+		},
+		{
+			name: "cancelBg",
+			spread: true,
+			execute: async (args) => {
+				const [id] = args as [unknown];
+				if (typeof id !== "string") throw new Error("cancelBg() expects a job id string");
+				const job = backgroundJobs.get(id);
+				if (!job) throw new Error(`Unknown background job: ${id}`);
+				if (job.status === "running") {
+					job.abortController.abort(new Error("Cancelled by cancelBg()"));
+					await Promise.race([job.donePromise, new Promise<void>((r) => setTimeout(r, 1000))]);
+				}
+				return formatBgJob(job);
+			},
+		},
+	];
 }
 
 function createOutlineGlobal(cwd: string): CodemodeTool {

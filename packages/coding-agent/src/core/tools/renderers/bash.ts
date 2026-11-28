@@ -12,7 +12,16 @@ import { VisualLinePreview } from "../../../modes/interactive/components/visual-
 import { theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { BashToolDetails } from "../bash.ts";
-import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } from "../render-utils.ts";
+import {
+	extractLiveProgress,
+	formatLiveStatusBar,
+	getTextOutput,
+	invalidArgText,
+	startSmoothProgressTimer,
+	startToolTimer,
+	str,
+	toolTimerText,
+} from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 const BASH_PREVIEW_LINES = 5;
@@ -44,6 +53,23 @@ function rebuildBashResultRenderComponent(
 		if (footerStart !== -1 && output.slice(footerStart).includes(fullOutputPath)) {
 			output = output.slice(0, footerStart).trimEnd();
 		}
+	}
+
+	if (options.isPartial && !options.expanded) {
+		const { percent, stage } = extractLiveProgress(output);
+		component.addChild(new Spacer(1));
+		component.addChild(
+			new Text(
+				formatLiveStatusBar(theme, {
+					percent,
+					stage: stage ?? "Running...",
+					timerText,
+				}),
+				0,
+				0,
+			),
+		);
+		return;
 	}
 
 	if (output) {
@@ -99,6 +125,7 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 			return text;
 		},
 		renderResult(result, options, _theme, context) {
+			startSmoothProgressTimer(context, options.isPartial);
 			const timerText = toolTimerText(context, options.isPartial);
 			const component = (context.lastComponent as Container | undefined) ?? new Container();
 			rebuildBashResultRenderComponent(component, result as any, options, context.showImages, timerText);
