@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -990,5 +990,15 @@ describe("awesome-pi-agent customizations", () => {
 			edits: [{ oldText: "export const x: number = 1;", newText: "export const x: number = ;" }],
 		});
 		expect((badTs.content[0] as any).text).toContain("Diagnostics (broken.ts):");
+	});
+
+	it("tracks one-time background checker auto-install attempts in diagnostics-tools.json", async () => {
+		const { scheduleAutoInstallChecker } = await import("../src/core/tools/diagnostics.js");
+		vi.stubEnv("PI_CODING_AGENT_DIR", tempDir);
+		scheduleAutoInstallChecker("gdtoolkit", [{ cmd: "nonexistent-installer-xyz", args: ["--version"] }]);
+		const cacheFile = join(tempDir, "diagnostics-tools.json");
+		expect(existsSync(cacheFile)).toBe(true);
+		const parsed = JSON.parse(readFileSync(cacheFile, "utf8"));
+		expect(parsed.attempted).toContain("gdtoolkit");
 	});
 });
