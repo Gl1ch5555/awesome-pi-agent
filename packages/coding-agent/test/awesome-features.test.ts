@@ -857,4 +857,49 @@ describe("awesome-pi-agent customizations", () => {
 		expect(res.errors).toHaveLength(1);
 		expect(res.errors[0]).toContain("missing.png");
 	});
+
+	it("tracks up to 6 unique recentModels most-recent-first in SettingsManager", async () => {
+		const { SettingsManager } = await import("../src/core/settings-manager.js");
+		const sm = SettingsManager.inMemory({});
+		for (let i = 1; i <= 8; i++) {
+			sm.addRecentModel("prov", `model-${i}`);
+		}
+		expect(sm.getRecentModels()).toEqual([
+			"prov/model-8",
+			"prov/model-7",
+			"prov/model-6",
+			"prov/model-5",
+			"prov/model-4",
+			"prov/model-3",
+		]);
+		sm.addRecentModel("prov", "model-5");
+		expect(sm.getRecentModels()[0]).toBe("prov/model-5");
+		expect(sm.getRecentModels()).toHaveLength(6);
+	});
+
+	it("extracts zero-token symbol outlines for TS and Python files", async () => {
+		const { outlinePath } = await import("../src/core/code-outline.js");
+		const tsFile = join(tempDir, "sample.ts");
+		writeFileSync(
+			tsFile,
+			[
+				"export interface Config {",
+				"  port: number;",
+				"}",
+				"export class Server {",
+				"  private async start(port: number): Promise<void> {",
+				"    if (port > 0) return;",
+				"  }",
+				"}",
+				"export const helper = (x: number) => x + 1;",
+			].join("\n"),
+		);
+		const outline = outlinePath("sample.ts", tempDir);
+		expect(outline).toContain("sample.ts (9 lines):");
+		expect(outline).toContain("L1 export interface Config");
+		expect(outline).toContain("L4 export class Server");
+		expect(outline).toContain("L5   private async start");
+		expect(outline).toContain("L9 export const helper");
+		expect(outline).not.toContain("if (port > 0)");
+	});
 });

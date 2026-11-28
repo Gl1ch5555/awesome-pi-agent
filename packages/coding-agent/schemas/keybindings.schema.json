@@ -231,6 +231,10 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Open model selector"
     },
+    "app.model.swap": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Swap to previous recent model"
+    },
     "app.tools.expand": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Toggle tool output"

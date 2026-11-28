@@ -491,6 +491,13 @@
       },
       "description": "Model patterns for cycling, in the same format as the --models CLI flag."
     },
+    "recentModels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Recently used model references (provider/id), most recent first."
+    },
     "defaultTools": {
       "type": "array",
       "items": {

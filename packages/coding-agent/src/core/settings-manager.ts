@@ -767,6 +767,31 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getRecentModels(limit = 6): string[] {
+		const raw = this.settings.recentModels;
+		if (!Array.isArray(raw)) return [];
+		const seen = new Set<string>();
+		const out: string[] = [];
+		for (const item of raw) {
+			if (typeof item !== "string") continue;
+			const trimmed = item.trim();
+			if (!trimmed || seen.has(trimmed)) continue;
+			seen.add(trimmed);
+			out.push(trimmed);
+			if (out.length >= limit) break;
+		}
+		return out;
+	}
+
+	addRecentModel(provider: string, modelId: string, limit = 6): void {
+		const ref = `${provider}/${modelId}`;
+		const existing = this.globalSettings.recentModels ?? this.settings.recentModels ?? [];
+		const next = [ref, ...existing.filter((item) => typeof item === "string" && item !== ref)].slice(0, limit);
+		this.globalSettings.recentModels = next;
+		this.markModified("recentModels");
+		this.save();
+	}
+
 	getSteeringMode(): "all" | "one-at-a-time" {
 		return this.settings.steeringMode || SETTINGS_DEFAULTS.steeringMode;
 	}

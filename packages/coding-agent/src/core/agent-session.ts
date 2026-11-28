@@ -2721,6 +2721,7 @@ export class AgentSession {
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+			this.settingsManager.addRecentModel(model.provider, model.id);
 			this._addPersistedDefaultToNonEmptyScope(model);
 		}
 

@@ -560,6 +560,11 @@ export const SettingsSchema = Type.Object(
 				description: "Model patterns for cycling, in the same format as the --models CLI flag.",
 			}),
 		),
+		recentModels: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "Recently used model references (provider/id), most recent first.",
+			}),
+		),
 		defaultTools: Type.Optional(
 			Type.Array(Type.String(), {
 				description:

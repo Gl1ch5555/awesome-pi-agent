@@ -29,6 +29,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "web", description: "Start, stop, or inspect the parallel localhost Web UI", argumentHint: "[start | stop | status]" },
 	{ name: "update", description: "Check and install updates from GitHub" },
 	{ name: "model", description: "Select model (opens selector UI)", argumentHint: "<provider/model>" },
+	{ name: "swap", description: "Switch to previous recently used model" },
+	{ name: "map", description: "Show zero-token symbol outline of a file or directory", argumentHint: "[path]" },
 	{ name: "tree", description: "Navigate session tree (switch branches)" },
 	{ name: "thinking", description: "Set thinking level", argumentHint: "<level>" },
 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },

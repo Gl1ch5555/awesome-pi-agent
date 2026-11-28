@@ -25,6 +25,7 @@ import {
 	toCodemodeIdentifier,
 } from "@earendil-works/pi-codemode";
 import { getCodemodeWorkerSpecifier, getQuickJSWasmPath } from "../../config.ts";
+import { outlinePath } from "../../core/code-outline.ts";
 import type { ExtensionToolContext, ToolNamespace } from "../../core/extensions/types.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
 import { formatSize, sliceHead, sliceTail } from "../../core/tools/truncate.ts";
@@ -585,6 +586,7 @@ export async function executeCodemode(
 			tools: sandboxTools,
 			globals: [
 				...createDiscoveryGlobals(callable, samples, options),
+				createOutlineGlobal(ctx?.cwd ?? process.cwd()),
 				...(options.models && ctx
 					? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
 					: []),
@@ -660,6 +662,28 @@ function isNamespaceName(namespace: ToolNamespace, query: string): boolean {
 	return [namespace.name, ...(namespace.aliases ?? [])].some(
 		(name) => name === query || toCodemodeIdentifier(name) === queryId,
 	);
+}
+
+function createOutlineGlobal(cwd: string): CodemodeTool {
+	return {
+		name: "outline",
+		spread: true,
+		execute: (args) => {
+			const [targetPath, opts] = args as [
+				unknown,
+				{ maxFiles?: unknown; maxDepth?: unknown; maxSymbolsPerFile?: unknown } | undefined,
+			];
+			const pathArg = targetPath === undefined || targetPath === null ? "." : targetPath;
+			if (typeof pathArg !== "string") {
+				throw new Error("outline() expects a string path");
+			}
+			return outlinePath(pathArg, cwd, {
+				maxFiles: typeof opts?.maxFiles === "number" ? opts.maxFiles : undefined,
+				maxDepth: typeof opts?.maxDepth === "number" ? opts.maxDepth : undefined,
+				maxSymbolsPerFile: typeof opts?.maxSymbolsPerFile === "number" ? opts.maxSymbolsPerFile : undefined,
+			});
+		},
+	};
 }
 
 /**

@@ -6,6 +6,7 @@ import {
 	getKeybindings,
 	getSelectPageIndex,
 	Input,
+	matchesKey,
 	Spacer,
 	Text,
 	type TUI,
@@ -70,6 +71,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private tui: TUI;
 	private scopedModels: ReadonlyArray<ScopedModelItem>;
 	private defaultModel?: DefaultModelReference;
+	private recentRankMap = new Map<string, number>();
 	private scope: ModelScope = "all";
 	private scopeText?: Text;
 	private scopeHintText?: Text;
@@ -87,6 +89,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		initialSearchInput?: string,
 		onSelectAsDefault?: (model: Model<any>) => void,
 		defaultModel?: DefaultModelReference,
+		recentModels: ReadonlyArray<string> = [],
 	) {
 		super();
 
@@ -95,6 +98,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.modelRuntime = modelRuntime;
 		this.scopedModels = scopedModels;
 		this.defaultModel = defaultModel;
+		recentModels.slice(0, 6).forEach((ref, index) => {
+			if (!this.recentRankMap.has(ref)) {
+				this.recentRankMap.set(ref, index);
+			}
+		});
 		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
 		this.onSelectAsDefaultCallback = onSelectAsDefault;
@@ -138,12 +146,24 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Hint
+		const quickPickHint = this.recentRankMap.size > 0 ? " · Alt+1..6 quick pick" : "";
 		if (this.onSelectAsDefaultCallback) {
 			this.addChild(
 				new Text(
 					theme.fg(
 						"dim",
-						`  ${keyDisplayText("tui.select.confirm")} to select · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to cancel`,
+						`  ${keyDisplayText("tui.select.confirm")} to select${quickPickHint} · ${keyDisplayText("app.models.save")} to set as default · ${keyDisplayText("tui.select.cancel")} to cancel`,
+					),
+					0,
+					0,
+				),
+			);
+		} else if (quickPickHint) {
+			this.addChild(
+				new Text(
+					theme.fg(
+						"dim",
+						`  ${keyDisplayText("tui.select.confirm")} to select${quickPickHint} · ${keyDisplayText("tui.select.cancel")} to cancel`,
 					),
 					0,
 					0,
@@ -173,11 +193,13 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const refreshed = this.modelRuntime.getModel(scoped.model.provider, scoped.model.id);
 			return refreshed ? { ...scoped, model: refreshed } : scoped;
 		});
-		this.scopedModelItems = this.scopedModels.map((scoped) => ({
-			provider: scoped.model.provider,
-			id: scoped.model.id,
-			model: scoped.model,
-		}));
+		this.scopedModelItems = this.sortModels(
+			this.scopedModels.map((scoped) => ({
+				provider: scoped.model.provider,
+				id: scoped.model.id,
+				model: scoped.model,
+			})),
+		);
 		this.activeModels = this.scope === "scoped" ? this.scopedModelItems : this.allModels;
 		this.filteredModels = this.activeModels;
 		const currentIndex = this.filteredModels.findIndex((item) => modelsAreEqual(this.currentModel, item.model));
@@ -234,14 +256,27 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.refreshAbortController.abort();
 	}
 
+	private getRecentRank(model: Model<any>): number {
+		return this.recentRankMap.get(`${model.provider}/${model.id}`) ?? -1;
+	}
+
+	private getQuickSwitchModels(): ModelItem[] {
+		return this.activeModels.filter((item) => this.getRecentRank(item.model) >= 0).slice(0, 6);
+	}
+
 	private sortModels(models: ModelItem[]): ModelItem[] {
 		const sorted = [...models];
-		// Sort: current model first, default model second, then by provider.
+		// Sort: current model first, recent models (up to 6) next, default model, then by provider.
 		sorted.sort((a, b) => {
 			const aIsCurrent = modelsAreEqual(this.currentModel, a.model);
 			const bIsCurrent = modelsAreEqual(this.currentModel, b.model);
 			if (aIsCurrent && !bIsCurrent) return -1;
 			if (!aIsCurrent && bIsCurrent) return 1;
+			const aRecent = this.getRecentRank(a.model);
+			const bRecent = this.getRecentRank(b.model);
+			if (aRecent >= 0 && bRecent >= 0) return aRecent - bRecent;
+			if (aRecent >= 0 && bRecent < 0) return -1;
+			if (aRecent < 0 && bRecent >= 0) return 1;
 			const aIsDefault = this.isDefaultModel(a.model);
 			const bIsDefault = this.isDefaultModel(b.model);
 			if (aIsDefault && !bIsDefault) return -1;
@@ -321,6 +356,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		);
 		const endIndex = Math.min(startIndex + MAX_VISIBLE, this.filteredModels.length);
 
+		const quickModels = this.getQuickSwitchModels();
+		const quickSlotMap = new Map<string, number>();
+		quickModels.forEach((m, idx) => {
+			quickSlotMap.set(`${m.provider}\0${m.id}`, idx + 1);
+		});
+
 		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredModels[i];
@@ -329,6 +370,9 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.selectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
 			const isDefault = this.isDefaultModel(item.model);
+			const quickSlot = quickSlotMap.get(`${item.provider}\0${item.id}`);
+			const slotBadge = quickSlot !== undefined ? theme.fg("muted", `[${quickSlot}] `) : "";
+			const recentBadge = quickSlot !== undefined && !isCurrent ? theme.fg("muted", " · recent") : "";
 			const defaultBadge = isDefault ? theme.fg("muted", " · default") : "";
 
 			const cursor = isSelected ? theme.fg("accent", "→ ") : "  ";
@@ -337,7 +381,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 			const name = getDistinctModelName({ id: item.id, name: item.model.name });
 			const nameText = name ? theme.fg("muted", ` (${name})`) : "";
 			const providerBadge = theme.fg("muted", `[${item.provider}]`);
-			const line = `${cursor}${currentMarker}${modelText}${nameText} ${providerBadge}${defaultBadge}`;
+			const line = `${cursor}${currentMarker}${slotBadge}${modelText}${nameText} ${providerBadge}${recentBadge}${defaultBadge}`;
 
 			this.listContainer.addChild(new Text(line, 0, 0));
 		}
@@ -372,6 +416,16 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
+		const quickKeys = ["alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6"] as const;
+		for (let slot = 0; slot < quickKeys.length; slot++) {
+			if (matchesKey(keyData, quickKeys[slot]!)) {
+				const quick = this.getQuickSwitchModels()[slot];
+				if (quick) {
+					this.handleSelect(quick.model);
+				}
+				return;
+			}
+		}
 		const pageIndex = getSelectPageIndex(kb, keyData, this.selectedIndex, this.filteredModels.length, MAX_VISIBLE);
 		if (kb.matches(keyData, "tui.input.tab")) {
 			if (this.scopedModelItems.length > 0) {

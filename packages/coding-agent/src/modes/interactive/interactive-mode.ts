@@ -125,6 +125,7 @@ import {
 } from "../../core/session-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import { outlinePath } from "../../core/code-outline.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import {
@@ -3429,6 +3430,7 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
+		this.defaultEditor.onAction("app.model.swap", () => void this.swapToPreviousModel());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => void this.handleOpenExternalEditor());
@@ -3629,6 +3631,17 @@ export class InteractiveMode {
 				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
 				await this.handleModelCommand(searchTerm);
+				return;
+			}
+			if (text === "/swap") {
+				this.editor.setText("");
+				await this.swapToPreviousModel();
+				return;
+			}
+			if (text === "/map" || text.startsWith("/map ")) {
+				const targetPath = text.startsWith("/map ") ? text.slice(5).trim() : undefined;
+				this.editor.setText("");
+				this.handleMapCommand(targetPath);
 				return;
 			}
 			if (text === "/thinking" || text.startsWith("/thinking ")) {
@@ -6323,6 +6336,34 @@ export class InteractiveMode {
 			return;
 		}
 
+		if (/^[1-6]$/.test(searchTerm)) {
+			const slot = Number(searchTerm) - 1;
+			const recentRefs = this.settingsManager.getRecentModels(6);
+			const ref = recentRefs[slot];
+			if (ref) {
+				const slashIdx = ref.indexOf("/");
+				if (slashIdx > 0) {
+					const provider = ref.slice(0, slashIdx);
+					const id = ref.slice(slashIdx + 1);
+					const quickModel = this.session.modelRuntime.getModel(provider, id);
+					if (quickModel) {
+						try {
+							await this.session.setModel(quickModel, { persist: true });
+							this.footer.invalidate();
+							this.updateEditorBorderColor();
+							this.showStatus(`Model [${searchTerm}]: ${quickModel.provider}/${quickModel.id}`);
+							this.triggerAutoSyncPush();
+							void this.maybeWarnAboutAnthropicSubscriptionAuth(quickModel);
+							return;
+						} catch (error) {
+							this.showError(error instanceof Error ? error.message : String(error));
+							return;
+						}
+					}
+				}
+			}
+		}
+
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			try {
@@ -6339,6 +6380,48 @@ export class InteractiveMode {
 		}
 
 		this.showModelSelector(searchTerm);
+	}
+
+	private async swapToPreviousModel(): Promise<void> {
+		const recentRefs = this.settingsManager.getRecentModels(6);
+		const currentRef = this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : "";
+		for (const ref of recentRefs) {
+			if (ref === currentRef) continue;
+			const slashIdx = ref.indexOf("/");
+			if (slashIdx <= 0) continue;
+			const provider = ref.slice(0, slashIdx);
+			const id = ref.slice(slashIdx + 1);
+			const target =
+				this.session.scopedModels.map((s) => s.model).find((m) => m.provider === provider && m.id === id) ??
+				this.session.modelRuntime.getModel(provider, id);
+			if (!target) continue;
+			try {
+				await this.session.setModel(target, { persist: true });
+				this.updateAvailableProviderCount();
+				this.footer.invalidate();
+				this.updateEditorBorderColor();
+				this.showStatus(`Swapped model: ${target.provider}/${target.id}`);
+				this.triggerAutoSyncPush();
+				void this.maybeWarnAboutAnthropicSubscriptionAuth(target);
+				return;
+			} catch (error) {
+				this.showError(error instanceof Error ? error.message : String(error));
+				return;
+			}
+		}
+		this.showStatus("No previous recent model to swap to");
+	}
+
+	private handleMapCommand(targetPath?: string): void {
+		try {
+			const cwd = this.session.sessionManager.getCwd();
+			const mapText = outlinePath(targetPath || ".", cwd);
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new Text(theme.fg("muted", mapText), 1, 0));
+			this.ui.requestRender();
+		} catch (error) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {
@@ -6498,6 +6581,7 @@ export class InteractiveMode {
 				initialSearchInput,
 				(model) => selectModel(model, true),
 				defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined,
+				this.settingsManager.getRecentModels(6),
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});

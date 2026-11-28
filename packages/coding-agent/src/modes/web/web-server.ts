@@ -449,7 +449,23 @@ export class PiWebServer {
 				this.session.scopedModels.length > 0
 					? this.session.scopedModels.map((s) => s.model)
 					: this.session.modelRuntime.getAvailableSnapshot();
-			const availableModels = rawModels.map((m) => ({
+			const recentRank = new Map<string, number>();
+			this.session.settingsManager.getRecentModels(6).forEach((ref, idx) => {
+				if (!recentRank.has(ref)) recentRank.set(ref, idx);
+			});
+			const sortedRawModels = [...rawModels].sort((a, b) => {
+				const aCurr = this.session.model?.provider === a.provider && this.session.model?.id === a.id;
+				const bCurr = this.session.model?.provider === b.provider && this.session.model?.id === b.id;
+				if (aCurr && !bCurr) return -1;
+				if (!aCurr && bCurr) return 1;
+				const aRec = recentRank.get(`${a.provider}/${a.id}`) ?? -1;
+				const bRec = recentRank.get(`${b.provider}/${b.id}`) ?? -1;
+				if (aRec >= 0 && bRec >= 0) return aRec - bRec;
+				if (aRec >= 0 && bRec < 0) return -1;
+				if (aRec < 0 && bRec >= 0) return 1;
+				return 0;
+			});
+			const availableModels = sortedRawModels.map((m) => ({
 				provider: m.provider,
 				id: m.id,
 				name: m.name,
