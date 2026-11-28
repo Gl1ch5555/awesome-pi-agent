@@ -17,8 +17,11 @@ export interface RecorderBackend {
 
 function commandExists(cmd: string): boolean {
 	try {
-		const checkCmd = process.platform === "win32" ? "where" : "which";
-		execFileSync(checkCmd, [cmd], { stdio: "ignore", timeout: 1500 });
+		if (process.platform === "win32") {
+			execFileSync("where", [cmd], { stdio: "ignore", timeout: 1500 });
+		} else {
+			execFileSync("sh", ["-c", 'command -v "$1" >/dev/null 2>&1', "--", cmd], { stdio: "ignore", timeout: 1500 });
+		}
 		return true;
 	} catch {
 		return false;
@@ -186,8 +189,11 @@ function execFileAsync(
 }
 
 async function commandExistsAsync(cmd: string): Promise<boolean> {
-	const checkCmd = process.platform === "win32" ? "where" : "which";
-	const res = await execFileAsync(checkCmd, [cmd], 1500);
+	if (process.platform === "win32") {
+		const res = await execFileAsync("where", [cmd], 1500);
+		return res.ok;
+	}
+	const res = await execFileAsync("sh", ["-c", 'command -v "$1" >/dev/null 2>&1', "--", cmd], 1500);
 	return res.ok;
 }
 
@@ -238,6 +244,12 @@ export async function warmupRecorderBackendAsync(): Promise<RecorderBackend | un
 					name: "parecord",
 					command: "parecord",
 					args: ["--format=s16le", "--rate=16000", "--channels=1", "--raw", "--latency-msec=50"],
+				};
+			} else if (await commandExistsAsync("pw-record")) {
+				backend = {
+					name: "pw-record",
+					command: "pw-record",
+					args: ["--format=s16", "--rate=16000", "--channels=1", "-"],
 				};
 			} else if (await commandExistsAsync("arecord")) {
 				backend = {
@@ -351,6 +363,13 @@ function detectRecorderBackendUncached(): RecorderBackend | undefined {
 				name: "parecord",
 				command: "parecord",
 				args: ["--format=s16le", "--rate=16000", "--channels=1", "--raw", "--latency-msec=50"],
+			};
+		}
+		if (commandExists("pw-record")) {
+			return {
+				name: "pw-record",
+				command: "pw-record",
+				args: ["--format=s16", "--rate=16000", "--channels=1", "-"],
 			};
 		}
 		if (commandExists("arecord")) {

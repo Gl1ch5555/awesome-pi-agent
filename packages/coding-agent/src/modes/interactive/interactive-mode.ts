@@ -3471,9 +3471,15 @@ export class InteractiveMode {
 		this.defaultEditor.setVoiceHoldEnabled(voiceHoldEnabled);
 		if (voiceHoldEnabled) {
 			setTimeout(() => {
-				void warmupRecorderBackendAsync().catch(() => {
-					// Ignore warmup failures; actual errors surface when recording starts
-				});
+				void warmupRecorderBackendAsync()
+					.then((backend) => {
+						if (!backend) {
+							this.defaultEditor.setVoiceHoldEnabled(false);
+						}
+					})
+					.catch(() => {
+						// Ignore warmup failures; actual errors surface when recording starts
+					});
 			}, 500).unref?.();
 		}
 		this.defaultEditor.onVoiceHoldStart = () => {
