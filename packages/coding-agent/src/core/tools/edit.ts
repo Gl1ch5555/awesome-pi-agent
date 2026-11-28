@@ -4,12 +4,12 @@ import { type Static, Type } from "typebox";
 import { splitBom } from "../../utils/text.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import {
-	applyEditsToNormalizedContent,
 	applyReplacementsToOriginal,
-	type Edit,
 	generateEditDiff,
 	normalizeToLF,
 } from "./edit-diff.ts";
+import { collectPostEditDiagnostics } from "./diagnostics.ts";
+import { applyHashlineOrExactEdits, type HashlineEdit } from "./hashline.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { type EditRenderState, editRenderers } from "./renderers/edit.ts";
@@ -17,10 +17,22 @@ import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wra
 
 const replaceEditSchema = Type.Object(
 	{
-		oldText: Type.String({
-			description:
-				"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
-		}),
+		oldText: Type.Optional(
+			Type.String({
+				description:
+					"Exact text for one targeted replacement (or a LINE#HASH / START#HASH..END#HASH anchor). Must be unique in the original file if exact text is used.",
+			}),
+		),
+		anchor: Type.Optional(
+			Type.String({
+				description: "LINE#HASH anchor from read/grep (e.g. '9#KT') to replace that line or start a range.",
+			}),
+		),
+		endAnchor: Type.Optional(
+			Type.String({
+				description: "Optional inclusive end LINE#HASH anchor (e.g. '14#PQ') when replacing a multi-line range.",
+			}),
+		),
 		newText: Type.String({ description: "Replacement text for this targeted edit." }),
 	},
 	{},
@@ -31,27 +43,29 @@ const editSchema = Type.Object(
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
 		edits: Type.Array(replaceEditSchema, {
 			description:
-				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+				"One or more targeted replacements. Prefer LINE#HASH anchors (anchor / endAnchor) from read/grep to save tokens and avoid whitespace mismatches, or provide exact oldText.",
 		}),
 	},
 	{},
 );
 
 export const editToolSystemPromptContribution = {
-	snippet: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+	snippet: "Make precise file edits using LINE#HASH anchors or exact text replacement",
 	guidelines: [
 		"Use edit for targeted changes. Batch changes to one file in a single call.",
-		"Each edits[].oldText must exactly and uniquely match the original file. Keep matches short and non-overlapping; merge nearby changes without including large unchanged regions.",
+		"Prefer LINE#HASH anchors (e.g. anchor='9#KT', optional endAnchor='14#PQ') returned by read/grep instead of quoting large oldText blocks.",
 	],
 } as const;
 
 export type EditToolInput = Static<typeof editSchema>;
 type LegacyEditToolInput = EditToolInput & {
 	oldText?: unknown;
+	anchor?: unknown;
+	endAnchor?: unknown;
 	newText?: unknown;
 };
 
-type SingleEditInput = { oldText: string; newText: string };
+type SingleEditInput = HashlineEdit;
 
 function isSingleEditInput(value: unknown): value is SingleEditInput {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -59,7 +73,10 @@ function isSingleEditInput(value: unknown): value is SingleEditInput {
 	}
 
 	const edit = value as Record<string, unknown>;
-	return typeof edit.oldText === "string" && typeof edit.newText === "string";
+	return (
+		(typeof edit.oldText === "string" || typeof edit.anchor === "string") &&
+		typeof edit.newText === "string"
+	);
 }
 
 export interface EditToolDetails {
@@ -93,6 +110,8 @@ const defaultEditOperations: EditOperations = {
 export interface EditToolOptions {
 	/** Custom operations for file editing. Default: local filesystem */
 	operations?: EditOperations;
+	/** Run fast zero-token local diagnostics after edit. Default: true */
+	diagnostics?: boolean;
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -118,17 +137,22 @@ function prepareEditArguments(input: unknown): EditToolInput {
 	}
 
 	const legacy = args as LegacyEditToolInput;
-	if (typeof legacy.oldText !== "string" || typeof legacy.newText !== "string") {
+	if (typeof legacy.newText !== "string" || (typeof legacy.oldText !== "string" && typeof legacy.anchor !== "string")) {
 		return args as EditToolInput;
 	}
 
 	const edits = Array.isArray(legacy.edits) ? [...legacy.edits] : [];
-	edits.push({ oldText: legacy.oldText, newText: legacy.newText });
-	const { oldText: _oldText, newText: _newText, ...rest } = legacy;
+	edits.push({
+		...(typeof legacy.oldText === "string" ? { oldText: legacy.oldText } : {}),
+		...(typeof legacy.anchor === "string" ? { anchor: legacy.anchor } : {}),
+		...(typeof legacy.endAnchor === "string" ? { endAnchor: legacy.endAnchor } : {}),
+		newText: legacy.newText,
+	});
+	const { oldText: _oldText, anchor: _anchor, endAnchor: _endAnchor, newText: _newText, ...rest } = legacy;
 	return { ...rest, edits } as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+function validateEditInput(input: EditToolInput): { path: string; edits: HashlineEdit[] } {
 	if (!Array.isArray(input.edits) || input.edits.length === 0) {
 		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
 	}
@@ -185,7 +209,7 @@ export function createEditToolDefinition(
 				// Strip BOM before matching. The model will not include an invisible BOM in oldText.
 				const { bom, text: content } = splitBom(rawContent);
 				const normalizedContent = normalizeToLF(content);
-				const { baseContent, newContent, replacements } = applyEditsToNormalizedContent(
+				const { baseContent, newContent, replacements } = applyHashlineOrExactEdits(
 					normalizedContent,
 					edits,
 					path,
@@ -201,11 +225,18 @@ export function createEditToolDefinition(
 				await ops.writeFile(absolutePath, finalContent);
 				throwIfAborted();
 
+				const diagNote =
+					options?.diagnostics !== false && !options?.operations
+						? await collectPostEditDiagnostics(absolutePath, ctx?.cwd || cwd)
+						: undefined;
+
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
+							text: diagNote
+								? `Successfully replaced ${edits.length} block(s) in ${path}.\n\n${diagNote}`
+								: `Successfully replaced ${edits.length} block(s) in ${path}.`,
 						},
 					],
 					details: editDiff,

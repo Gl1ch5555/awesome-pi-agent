@@ -9,6 +9,8 @@
 - **Zero-Token Code Map (`/map` & `outline()` in `codemode`):** Fast local symbol extractor for TypeScript/JavaScript, Python, Go, Rust, C/C++, Java/C#, Ruby, PHP, and Markdown. Use `/map [path]` in TUI (0 LLM tokens) or `await outline(path?)` inside `codemode` to inspect large files with line numbers before reading slices.
 - **Background Poll for Long `codemode` Scripts (`poll()` & `cancelBg()`):** Scripts running longer than 25s (or marked `// @background`) automatically move to the background without blocking the chat.
 - **Clean `codemode` Feed & Live Animated Status Bars (`bash` / `codemode`):** Raw orchestrator JS is hidden by default (expandable via `Ctrl+O`), and running shell/script tasks display a compact animated progress/status bar instead of raw log walls.
+- **Hashline Edits (`LINE#HASH` Anchors in `read`, `grep`, `edit`):** Lines from `read` and `grep` carry short 2-character content hashes (`9#KT`); `edit` accepts `anchor`/`endAnchor` references instead of quoting `oldText` and safely rejects stale hashes.
+- **Diagnostics-on-Edit (`edit` / `write`):** Fast, zero-token local diagnostics (TypeScript, Python, JSON, Go, Rust) run automatically after file edits and append any new errors directly to the tool response.
 - **Fork Identity, Docs & Update Changelog (`docs/pi-awesome.md`):** Added `pi-awesome` fork documentation, `Gl1ch5555/awesome-pi-agent` repository links in CLI/TUI/changelog, and automatic changelog preview right after `/update`.
 
 ## [Unreleased]

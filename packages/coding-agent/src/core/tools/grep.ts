@@ -5,6 +5,7 @@ import path from "path";
 import { type Static, Type } from "typebox";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { computeLineHash } from "./hashline.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { grepRenderers } from "./renderers/grep.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -225,9 +226,10 @@ export function createGrepToolDefinition(
 							// Truncate long lines so grep output stays compact.
 							const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
 							if (wasTruncated) linesTruncated = true;
+							const lineHash = computeLineHash(lineText);
 							const line = isMatch
-								? `${relativePath}:${lineNumber}: ${truncatedText}`
-								: `${relativePath}-${lineNumber}- ${truncatedText}`;
+								? `${relativePath}:${lineNumber}#${lineHash}: ${truncatedText}`
+								: `${relativePath}-${lineNumber}#${lineHash}- ${truncatedText}`;
 							// Byte truncation below drops everything past the cap, so keep counting but stop storing (#9276).
 							// outputBytes counts a newline after every line; the joined output has one fewer.
 							if (outputBytes - 1 <= DEFAULT_MAX_BYTES) outputLines.push(line);

@@ -2,6 +2,7 @@ import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { collectPostEditDiagnostics } from "./diagnostics.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { writeRenderers } from "./renderers/write.ts";
@@ -38,6 +39,8 @@ const defaultWriteOperations: WriteOperations = {
 export interface WriteToolOptions {
 	/** Custom operations for file writing. Default: local filesystem */
 	operations?: WriteOperations;
+	/** Run fast zero-token local diagnostics after write. Default: true */
+	diagnostics?: boolean;
 }
 
 export function createWriteToolDefinition(
@@ -81,8 +84,20 @@ export function createWriteToolDefinition(
 				await ops.writeFile(absolutePath, content);
 				throwIfAborted();
 
+				const diagNote =
+					options?.diagnostics !== false && !options?.operations
+						? await collectPostEditDiagnostics(absolutePath, ctx?.cwd || cwd)
+						: undefined;
+
 				return {
-					content: [{ type: "text", text: `Successfully wrote to ${path}` }],
+					content: [
+						{
+							type: "text",
+							text: diagNote
+								? `Successfully wrote to ${path}\n\n${diagNote}`
+								: `Successfully wrote to ${path}`,
+						},
+					],
 					details: undefined,
 				};
 			});

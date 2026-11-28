@@ -3876,7 +3876,7 @@ export class AgentSession {
 					]),
 				)
 			: createAllToolDefinitions(this._cwd, {
-					read: { autoResizeImages },
+					read: { autoResizeImages, hashline: true },
 					bash: { commandPrefix: shellCommandPrefix, shellPath },
 					memory: {
 						getAgentDir: () => this.settingsManager.getAgentDir(),

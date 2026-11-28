@@ -6,6 +6,7 @@ import { TextDecoder } from "util";
 import { processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { formatLinesWithHash } from "./hashline.ts";
 import { resolveReadPathAsync } from "./path-utils.ts";
 import { readRenderers } from "./renderers/read.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -15,6 +16,9 @@ const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
 	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
 	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	hashline: Type.Optional(
+		Type.Boolean({ description: "Prefix each line with LINE#HASH anchors for edit (default: true)." }),
+	),
 });
 
 export const readToolSystemPromptContribution = {
@@ -98,6 +102,8 @@ export interface ReadToolOptions {
 	resizeOptions?: ModelImageResizeOptions;
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
+	/** Prefix lines with LINE#HASH anchors. Default: true */
+	hashline?: boolean;
 }
 
 /** The image block and its note, or the text for text files and images that could not be processed. */
@@ -244,7 +250,7 @@ export function createReadToolDefinition(
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		async execute(
 			_toolCallId,
-			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
+			{ path, offset, limit, hashline }: { path: string; offset?: number; limit?: number; hashline?: boolean },
 			signal?: AbortSignal,
 			_onUpdate?,
 			ctx?: ExtensionContext,
@@ -314,6 +320,11 @@ export function createReadToolDefinition(
 								// A user-specified limit is honored before truncation.
 								const userLimitedLines =
 									limit === undefined ? undefined : Math.min(startLine + limit, totalFileLines) - startLine;
+								const useHashline = hashline ?? options?.hashline ?? false;
+								const displayBody =
+									useHashline && !truncation.firstLineExceedsLimit
+										? formatLinesWithHash(truncation.content, startLineDisplay)
+										: truncation.content;
 								let outputText: string;
 								if (truncation.firstLineExceedsLimit) {
 									// First line alone exceeds the byte limit. Point the model at a bash fallback.
@@ -324,7 +335,7 @@ export function createReadToolDefinition(
 									// Truncation occurred. Build an actionable continuation notice.
 									const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
 									const nextOffset = endLineDisplay + 1;
-									outputText = truncation.content;
+									outputText = displayBody;
 									if (truncation.truncatedBy === "lines") {
 										outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines}. Use offset=${nextOffset} to continue.]`;
 									} else {
@@ -335,10 +346,10 @@ export function createReadToolDefinition(
 									// User-specified limit stopped early, but the file still has more content.
 									const remaining = totalFileLines - (startLine + userLimitedLines);
 									const nextOffset = startLine + userLimitedLines + 1;
-									outputText = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
+									outputText = `${displayBody}\n\n[${remaining} more lines in file. Use offset=${nextOffset} to continue.]`;
 								} else {
 									// No truncation and no remaining user-limited content.
-									outputText = truncation.content;
+									outputText = displayBody;
 								}
 								content = [{ type: "text", text: outputText }];
 							}

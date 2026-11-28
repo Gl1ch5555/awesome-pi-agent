@@ -940,4 +940,55 @@ describe("awesome-pi-agent customizations", () => {
 		const expandedText = stripAnsi(expanded.render(120).join("\n"));
 		expect(expandedText).toContain("const a = 1;");
 	});
+
+	it("supports LINE#HASH anchors in read/edit and rejects stale hash mismatches", async () => {
+		const { createReadTool } = await import("../src/core/tools/read.js");
+		const { createEditTool } = await import("../src/core/tools/edit.js");
+		const filePath = join(tempDir, "sample.txt");
+		writeFileSync(filePath, "alpha\nbeta\ngamma\ndelta\n", "utf8");
+
+		const readTool = createReadTool(tempDir, { hashline: true });
+		const readRes = await readTool.execute("r1", { path: "sample.txt" });
+		const readText = (readRes.content[0] as any).text as string;
+		const lines = readText.split("\n");
+		const line2Match = lines[1]!.match(/^2#([A-Z0-9]{2}): beta$/);
+		const line3Match = lines[2]!.match(/^3#([A-Z0-9]{2}): gamma$/);
+		expect(line2Match).toBeTruthy();
+		expect(line3Match).toBeTruthy();
+
+		const editTool = createEditTool(tempDir, { diagnostics: false });
+		await editTool.execute("e1", {
+			path: "sample.txt",
+			edits: [{ anchor: `2#${line2Match![1]}`, endAnchor: `3#${line3Match![1]}`, newText: "BETA\nGAMMA" }],
+		});
+		expect(readFileSync(filePath, "utf8")).toBe("alpha\nBETA\nGAMMA\ndelta\n");
+
+		// Stale hash must be rejected safely
+		await expect(
+			editTool.execute("e2", {
+				path: "sample.txt",
+				edits: [{ anchor: `2#${line2Match![1]}`, newText: "should-fail" }],
+			}),
+		).rejects.toThrow(/Hashline mismatch/);
+	});
+
+	it("reports zero-token local diagnostics immediately after edit/write", async () => {
+		const { createWriteTool } = await import("../src/core/tools/write.js");
+		const { createEditTool } = await import("../src/core/tools/edit.js");
+		const writeTool = createWriteTool(tempDir);
+		const badJson = await writeTool.execute("w1", {
+			path: "broken.json",
+			content: '{ "a": 1, }',
+		});
+		expect((badJson.content[0] as any).text).toContain("Diagnostics (broken.json):");
+
+		const tsFile = join(tempDir, "broken.ts");
+		writeFileSync(tsFile, "export const x: number = 1;\n", "utf8");
+		const editTool = createEditTool(tempDir);
+		const badTs = await editTool.execute("e1", {
+			path: "broken.ts",
+			edits: [{ oldText: "export const x: number = 1;", newText: "export const x: number = ;" }],
+		});
+		expect((badTs.content[0] as any).text).toContain("Diagnostics (broken.ts):");
+	});
 });
