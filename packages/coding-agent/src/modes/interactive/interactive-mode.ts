@@ -1201,7 +1201,10 @@ export class InteractiveMode {
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					`pi-awesome by Gl1ch5555 (github.com/Gl1ch5555/awesome-pi-agent) — ask me about features, changelog, or docs.`,
+				);
 			const header = new BuiltInHeader(
 				() =>
 					isAgentPackStyle(this.settingsManager.getTuiStyle())
@@ -6114,6 +6117,20 @@ export class InteractiveMode {
 				this.showStatus(stage);
 			});
 			this.showStatus(result.message);
+			if (result.updated) {
+				const details = result.changelog ?? (result.commitMessage ? `Latest change: ${result.commitMessage}` : undefined);
+				if (details) {
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(new DynamicBorder());
+					this.chatContainer.addChild(
+						new ThemedText(() => theme.bold(theme.fg("accent", `What's New in pi-awesome v${result.version}`)), 1, 0),
+					);
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(this.createChangelogMarkdown(details, 1, 1));
+					this.chatContainer.addChild(new DynamicBorder());
+					this.ui.requestRender();
+				}
+			}
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -7997,7 +8014,13 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new ThemedText(() => theme.bold(theme.fg("accent", "What's New")), 1, 0));
+		this.chatContainer.addChild(
+			new ThemedText(
+				() => theme.bold(theme.fg("accent", "What's New · pi-awesome (github.com/Gl1ch5555/awesome-pi-agent)")),
+				1,
+				0,
+			),
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(this.createChangelogMarkdown(changelogMarkdown, 1, 1));
 		this.chatContainer.addChild(new DynamicBorder());

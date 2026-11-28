@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0] - 2026-11-28
+
+### Added
+
+- **Recent 6 Models Quick-Switch (`recentModels`):** The 6 most recently used models are now pinned at the top of `/model` (`Ctrl+L`) and the Web UI model selector with `[1]`–`[6]` slots and `· recent` badges.
+- **Instant Model Swap (`/swap` & `Alt+L`, `Alt+1..6`, `/model 1..6`):** Jump between your current and previous model in one keystroke (`Alt+L` or `/swap`) without opening a search menu, or press `Alt+1..6` inside `/model`.
+- **Zero-Token Code Map (`/map` & `outline()` in `codemode`):** Fast local symbol extractor for TypeScript/JavaScript, Python, Go, Rust, C/C++, Java/C#, Ruby, PHP, and Markdown. Use `/map [path]` in TUI (0 LLM tokens) or `await outline(path?)` inside `codemode` to inspect large files with line numbers before reading slices.
+- **Fork Identity, Docs & Update Changelog (`docs/pi-awesome.md`):** Added `pi-awesome` fork documentation, `Gl1ch5555/awesome-pi-agent` repository links in CLI/TUI/changelog, and automatic changelog preview right after `/update`.
+
 ## [Unreleased]
 
 ### Added

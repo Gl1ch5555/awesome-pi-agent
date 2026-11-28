@@ -19,9 +19,12 @@ import { isNewerPackageVersion } from "../utils/version-check.ts";
 const webFetch: typeof fetch = (input, init) => scopedFetch("web", input as string | URL | Request, init);
 
 export const AWESOME_PI_REPO = "Gl1ch5555/awesome-pi-agent";
+export const AWESOME_PI_URL = `https://github.com/${AWESOME_PI_REPO}`;
+export const AWESOME_PI_AUTHOR_URL = "https://github.com/Gl1ch5555";
 const RELEASE_BASE_URL = `https://github.com/${AWESOME_PI_REPO}/releases/download/latest`;
 const RELEASE_VERSION_URL = `${RELEASE_BASE_URL}/version.json`;
 const GITHUB_COMMITS_URL = `https://api.github.com/repos/${AWESOME_PI_REPO}/commits/main`;
+const GITHUB_CHANGELOG_URL = `https://raw.githubusercontent.com/${AWESOME_PI_REPO}/main/packages/coding-agent/CHANGELOG.md`;
 const GITHUB_PACKAGE_JSON_URL = `https://raw.githubusercontent.com/${AWESOME_PI_REPO}/main/packages/coding-agent/package.json`;
 const GITHUB_TARBALL_URL = `https://github.com/${AWESOME_PI_REPO}/archive/refs/heads/main.tar.gz`;
 const GITHUB_ZIP_URL = `https://github.com/${AWESOME_PI_REPO}/archive/refs/heads/main.zip`;
@@ -537,10 +540,57 @@ async function tryUpdateFromPrebuiltRelease(
 	}
 }
 
+async function fetchRemoteChangelogSection(version: string, headers: Record<string, string>): Promise<string | undefined> {
+	try {
+		const res = await webFetch(`${GITHUB_CHANGELOG_URL}?t=${Date.now()}`, {
+			headers,
+			signal: AbortSignal.timeout(4000),
+		});
+		if (!res.ok) return undefined;
+		const text = await res.text();
+		const lines = text.split(/\r?\n/);
+		const sections: string[] = [];
+		let collecting = false;
+		for (const line of lines) {
+			if (line.startsWith("## [")) {
+				if (collecting) break;
+				if (line.includes(`[${version}]`) || (!version && sections.length === 0)) {
+					collecting = true;
+				}
+			}
+			if (collecting) {
+				sections.push(line);
+			}
+		}
+		if (sections.length > 0) {
+			return sections.join("\n").trim();
+		}
+		// Fallback to first version section in CHANGELOG.md
+		collecting = false;
+		for (const line of lines) {
+			if (line.startsWith("## [") && !line.includes("[Unreleased]")) {
+				if (collecting) break;
+				collecting = true;
+			}
+			if (collecting) sections.push(line);
+		}
+		return sections.length > 0 ? sections.join("\n").trim() : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export async function performGithubSelfUpdate(
 	currentVersion: string,
 	onProgress?: (stage: string) => void,
-): Promise<{ updated: boolean; version: string; shortSha?: string; message: string }> {
+): Promise<{
+	updated: boolean;
+	version: string;
+	shortSha?: string;
+	message: string;
+	changelog?: string;
+	commitMessage?: string;
+}> {
 	const check = await checkGithubUpdate(currentVersion);
 	if (check && !check.hasUpdate) {
 		return {
@@ -562,11 +612,14 @@ export async function performGithubSelfUpdate(
 	const prebuilt = await tryUpdateFromPrebuiltRelease(installRoot, headers, onProgress);
 	if (prebuilt.ok) {
 		writeInstalledSha(newSha, newVer);
+		const changelog = await fetchRemoteChangelogSection(newVer, headers);
 		return {
 			updated: true,
 			version: newVer,
 			shortSha: newSha.slice(0, 7),
 			message: `Updated to prebuilt v${newVer} (${newSha.slice(0, 7)}). Restart pi-awesome to use the new build.`,
+			changelog,
+			commitMessage: check?.commitMessage,
 		};
 	}
 
@@ -617,11 +670,14 @@ export async function performGithubSelfUpdate(
 		await runCommand(npmCmd, ["run", "build:offline"], srcDir, isWin);
 
 		writeInstalledSha(newSha, newVer);
+		const changelog = await fetchRemoteChangelogSection(newVer, headers);
 		return {
 			updated: true,
 			version: newVer,
 			shortSha: newSha.slice(0, 7),
 			message: `Updated to ${newVer} (${newSha.slice(0, 7)}). Restart pi-awesome to apply.`,
+			changelog,
+			commitMessage: check?.commitMessage,
 		};
 	} finally {
 		rmSync(tempDir, { recursive: true, force: true });

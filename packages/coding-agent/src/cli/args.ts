@@ -493,5 +493,9 @@ ${chalk.bold("Built-in Tool Names:")}
   grep       - Search file contents (read-only, off by default)
   find       - Find files by glob pattern (read-only, off by default)
   ls         - List directory contents (read-only, off by default)
+
+${chalk.bold("pi-awesome:")}
+  Repository: https://github.com/Gl1ch5555/awesome-pi-agent
+  Author:     https://github.com/Gl1ch5555
 `);
 }
