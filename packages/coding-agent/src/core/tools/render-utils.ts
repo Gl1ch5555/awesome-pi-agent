@@ -304,13 +304,22 @@ export function prefixLinesWithRail(
 
 export function summarizeShellCommandFallback(command: string): string {
 	let clean = command.replace(/\r/g, "").trim();
-	// Strip outer powershell.exe -NoProfile -Command "..." or bash -lc "..." wrappers
-	clean = clean.replace(/^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-\w+\s+)*-Command\s+["']?/i, "");
+	const psFileMatch = clean.match(/([\w./\\:-]+\.ps1)\b/i);
+	if (psFileMatch && (clean.includes("cat >") || clean.includes("powershell"))) {
+		return `Running PowerShell script (${psFileMatch[1]})`;
+	}
+	if (/powershell(?:\.exe)?|pwsh(?:\.exe)?/i.test(clean)) {
+		clean = clean.replace(/^(?:powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-\w+\s+)*-Command\s+["']?/i, "");
+		clean = clean.replace(/["']\s*$/, "");
+		clean = clean.replace(/\s+/g, " ").trim();
+		if (!clean) return "Running PowerShell command...";
+		return clean.length > 64 ? `PowerShell: ${clean.slice(0, 61)}...` : `PowerShell: ${clean}`;
+	}
 	clean = clean.replace(/^(?:bash|sh|zsh)\s+-(?:l|c|lc)\s+["']?/i, "");
 	clean = clean.replace(/["']\s*$/, "");
 	clean = clean.replace(/\s+/g, " ").trim();
 	if (!clean) return "Running command...";
-	return clean.length > 72 ? `${clean.slice(0, 69)}...` : clean;
+	return clean.length > 68 ? `${clean.slice(0, 65)}...` : clean;
 }
 
 export function renderToolPath(

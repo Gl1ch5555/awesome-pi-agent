@@ -1002,9 +1002,9 @@ describe("awesome-pi-agent customizations", () => {
 		expect(parsed.attempted).toContain("gdtoolkit");
 	});
 
-	it("strips decorative tool label from LLM history in convertToLlm without mutating UI messages", async () => {
+	it("strips decorative tool label from older LLM history in convertToLlm while keeping latest turn as few-shot cue", async () => {
 		const { convertToLlm } = await import("../src/core/messages.js");
-		const originalMsg: any = {
+		const olderMsg: any = {
 			role: "assistant",
 			content: [
 				{
@@ -1019,13 +1019,27 @@ describe("awesome-pi-agent customizations", () => {
 			model: "gpt-4o",
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
 			stopReason: "toolUse",
+			timestamp: Date.now() - 1000,
+		};
+		const latestMsg: any = {
+			...olderMsg,
+			content: [
+				{
+					type: "toolCall",
+					id: "call_2",
+					name: "bash",
+					arguments: { label: "Проверяю свободное место", command: "df -h" },
+				},
+			],
 			timestamp: Date.now(),
 		};
-		const llm = convertToLlm([originalMsg]);
-		const llmCall = (llm[0] as any).content[0];
-		expect(llmCall.arguments).toEqual({ command: "find / -size +400M" });
-		expect("label" in llmCall.arguments).toBe(false);
-		expect(originalMsg.content[0].arguments.label).toBe("Ищу крупные файлы");
+		const llm = convertToLlm([olderMsg, latestMsg]);
+		const olderCall = (llm[0] as any).content[0];
+		const latestCall = (llm[1] as any).content[0];
+		expect(olderCall.arguments).toEqual({ command: "find / -size +400M" });
+		expect("label" in olderCall.arguments).toBe(false);
+		expect(latestCall.arguments.label).toBe("Проверяю свободное место");
+		expect(olderMsg.content[0].arguments.label).toBe("Ищу крупные файлы");
 	});
 
 	it("renders Left Accent Rail with label for bash/powershell and reveals raw command on expand", async () => {

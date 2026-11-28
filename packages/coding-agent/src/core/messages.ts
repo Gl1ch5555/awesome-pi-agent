@@ -146,8 +146,17 @@ export function createCustomMessage(
  * - Custom extensions and tools
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
+	// Keep decorative `label` on the latest assistant turn as a live few-shot cue so models
+	// don't drop it on turn 2+, while stripping it from all earlier turns to save context.
+	let lastAssistantIndex = -1;
+	for (let i = messages.length - 1; i >= 0; i--) {
+		if (messages[i]?.role === "assistant") {
+			lastAssistantIndex = i;
+			break;
+		}
+	}
 	return messages
-		.map((m): Message | undefined => {
+		.map((m, index): Message | undefined => {
 			switch (m.role) {
 				case "bashExecution":
 					// Skip messages excluded from context (!! prefix)
@@ -184,7 +193,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 				case "system":
 				case "user":
 				case "assistant": {
-					if (!Array.isArray(m.content)) return m;
+					if (index === lastAssistantIndex || !Array.isArray(m.content)) return m;
 					let changed = false;
 					const strippedContent = m.content.map((block) => {
 						if (
